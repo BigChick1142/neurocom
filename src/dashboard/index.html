@@ -4,16 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Neurocom</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 128 128%27%3E%3Crect width=%27128%27 height=%27128%27 rx=%2728%27 fill=%27%230b1220%27/%3E%3Cpath d=%27M38 92V36L90 92V36%27 fill=%27none%27 stroke=%27%2322d3ee%27 stroke-width=%279%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E">
 <style>
   :root {
-    --bg:#0d1117; --surface:#151b23; --raised:#1b232d; --line:#27313d; --text:#e8eef5; --muted:#92a0b1; --faint:#5d6b7c;
-    --accent:#58a6ff; --accent-bg:rgba(88,166,255,.14);
+    --bg:#080d17; --surface:#0f1626; --raised:#16203a; --line:#24304d; --text:#e8eef5; --muted:#92a0b1; --faint:#5d6b7c;
+    --accent:#22d3ee; --accent-bg:rgba(34,211,238,.13); --accent2:#6366f1; --on-accent:#04222b;
     --ok:#3fb950; --ok-bg:rgba(63,185,80,.14); --warn:#e3b341; --warn-bg:rgba(227,179,65,.14); --bad:#f85149; --bad-bg:rgba(248,81,73,.14);
     --radius:12px; color-scheme:dark;
   }
   :root[data-theme="light"] {
     --bg:#f3f5f8; --surface:#ffffff; --raised:#f0f3f7; --line:#dbe2ea; --text:#14202c; --muted:#556575; --faint:#8a97a6;
-    --accent:#0b62d6; --accent-bg:rgba(11,98,214,.10); --ok:#1a7f37; --ok-bg:rgba(26,127,55,.10); --warn:#8a6100; --warn-bg:rgba(154,103,0,.12); --bad:#c62828; --bad-bg:rgba(198,40,40,.09);
+    --accent:#0e7490; --accent-bg:rgba(14,116,144,.10); --accent2:#4f46e5; --on-accent:#ffffff; --ok:#1a7f37; --ok-bg:rgba(26,127,55,.10); --warn:#8a6100; --warn-bg:rgba(154,103,0,.12); --bad:#c62828; --bad-bg:rgba(198,40,40,.09);
     color-scheme:light;
   }
   * { box-sizing:border-box; }
@@ -26,7 +27,15 @@
   /* header */
   header { position:sticky; top:0; z-index:10; background:var(--surface); border-bottom:1px solid var(--line); }
   .bar { max-width:1180px; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .brand { font-weight:700; letter-spacing:.2px; }
+  .brand { display:inline-flex; align-items:center; gap:10px; font-weight:700; }
+  .brand svg { width:30px; height:30px; flex:none; filter:drop-shadow(0 0 8px rgba(34,211,238,.35)); }
+  .brand .word { letter-spacing:.2em; font-size:15px; }
+  .brand .motto { font-weight:400; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); opacity:.9; display:block; line-height:1.1; margin-top:2px; }
+  .brand .lock { display:flex; flex-direction:column; }
+  header::after { content:""; display:block; height:2px; background:linear-gradient(90deg,var(--accent),var(--accent2),transparent 70%); }
+  .foot { max-width:1180px; margin:0 auto; padding:0 16px 36px; color:var(--faint); font-size:12.5px; text-align:center; }
+  .foot a { color:var(--muted); }
+  @media (max-width:640px){ .brand .motto{display:none;} }
   .status { display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--muted); }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); flex:none; }
   .dot.on { background:var(--ok); }
@@ -38,7 +47,7 @@
   .actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
   .btn { border:1px solid var(--line); background:var(--raised); padding:6px 14px; border-radius:9px; font-size:14px; }
   .btn:hover { border-color:var(--accent); }
-  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   .btn.stop { background:var(--bad-bg); border-color:var(--bad); color:var(--bad); font-weight:600; }
   .btn.small { padding:3px 10px; font-size:13px; }
   .btn:focus-visible, .tab:focus-visible, .seg button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
@@ -137,7 +146,7 @@
   input[type=number], input[type=text], select { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:6px 9px; width:100%; }
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
   .seg button { border:0; background:transparent; padding:6px 14px; font-size:14px; }
-  .seg button[aria-pressed="true"] { background:var(--accent); color:#fff; }
+  .seg button[aria-pressed="true"] { background:var(--accent); color:var(--on-accent); }
   .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:8px 16px; border-radius:99px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; }
   .toast.show { opacity:1; }
   .hidden { display:none !important; }
@@ -147,7 +156,7 @@
 <body>
 <header>
   <div class="bar">
-    <span class="brand">Neurocom</span>
+    <span class="brand"><svg viewBox="0 0 128 128" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs><rect width="128" height="128" rx="28" fill="#0b1220"/><rect x="4" y="4" width="120" height="120" rx="24" fill="none" stroke="url(#lg)" stroke-width="3"/><path d="M38 92V36L90 92V36" fill="none" stroke="url(#lg)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><g fill="#e6faff"><circle cx="38" cy="36" r="7"/><circle cx="38" cy="92" r="7"/><circle cx="90" cy="36" r="7"/><circle cx="90" cy="92" r="7"/></g></svg><span class="lock"><span class="word">NEUROCOM</span><span class="motto">Autopilot for grand strategy</span></span></span>
     <span class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
     <select id="game" aria-label="Choose game" style="width:auto;max-width:230px"></select>
     <button class="btn small" id="addgame" title="Open another tab on the game site so you can pick another game there">+ Add game</button>
@@ -161,6 +170,7 @@
   <nav role="tablist" id="tabs"></nav>
 </header>
 <main id="main"></main>
+<footer class="foot">Neurocom · unofficial, not affiliated with the game's publisher · use at your own risk · <a href="https://github.com/BigChick1142/neurocom" target="_blank" rel="noopener">GitHub</a></footer>
 <div class="toast" id="toast" role="status"></div>
 
 <script>
@@ -422,7 +432,7 @@ function renderHeader() {
   renderGameSelect();
   const s = S.state, st = S.settings;
   $("dot").className = "dot" + (S.connected ? " on" : "");
-  $("conn").textContent = !S.connected ? "Not connected" : !st.enabled ? "Paused" : st.dryRun ? "Preview only" : "Running";
+  $("conn").textContent = !S.connected ? "Not connected" : !st.enabled ? "Paused" : st.dryRun ? "Preview only" : "Online";
   $("who").textContent = s ? `${s.me.nation} · day ${s.day}` : "";
   if (s) { const pct = Math.min(100, (s.me.vps / (s.vpLimit || 1)) * 100); $("vptext").innerHTML = `<b class="num">${n0(s.me.vps)}</b> / ${n0(s.vpLimit)}`; $("vpbar").style.width = pct + "%"; }
   const p = $("pause"); p.textContent = st.enabled ? "Pause bot" : "Resume bot"; p.className = "btn " + (st.enabled ? "stop" : "primary");
@@ -434,7 +444,7 @@ function render() {
   renderHeader();
   if (S.noGame) {
     $("main").dataset.tab = "none";
-    $("main").innerHTML = `<div class="card hero warn"><h1>No game is open yet</h1><ul><li>Open a game in the bot's browser window (the one with the game site) and a player starts for it automatically within about 15 seconds.</li><li>You can play several games at once: each open game tab gets its own player with its own settings and memory.</li></ul><p style="margin-top:12px"><button class="btn primary" id="addgame2">Open a game tab</button></p></div>`;
+    $("main").innerHTML = `<div class="card hero warn"><h1>Standing by: no game is open yet</h1><ul><li>Open a game in the browser window Neurocom started (the one on the game site) and it takes command within about 15 seconds.</li><li>You can play several games at once: each open game tab gets its own player with its own settings and memory.</li></ul><p style="margin-top:12px"><button class="btn primary" id="addgame2">Open a game tab</button></p></div>`;
     return;
   }
   if (tab === "home" && hovering) return; // do not rebuild the charts under the pointer

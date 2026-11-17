@@ -1,6 +1,16 @@
+<p align="center"><img src="assets/banner.svg" alt="Neurocom: autopilot for grand strategy" width="100%"></p>
+
+<p align="center">
+  <img alt="License: PolyForm Noncommercial" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-22d3ee">
+  <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows-6366f1">
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-20%2B-22d3ee">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-6366f1">
+  <img alt="Unofficial" src="https://img.shields.io/badge/unofficial-use%20at%20your%20own%20risk-e3b341">
+</p>
+
 # Neurocom
 
-An autopilot and dashboard for the browser strategy game Conflict of Nations (WW3). Unofficial and not affiliated with the game or its publisher.
+**An autopilot and command dashboard for the browser strategy game Conflict of Nations (WW3).** It builds, researches, trains, trades, fights, negotiates and learns, while you watch from a clean dashboard. Unofficial and not affiliated with the game or its publisher.
 
 A browser-driven bot: Playwright keeps your logged-in game open, an in-page API issues orders through the game's own
 client controllers (so requests are signed by the game itself), a strategy "brain" decides what to do, and a local
@@ -9,6 +19,19 @@ dashboard shows everything and lets you steer.
 > **Read this first.** Software that plays a live game for you very likely breaks the game's Terms of Service, and accounts can be banned. Use an account you can afford to lose, and read [`DISCLAIMER.md`](DISCLAIMER.md) before you run it. It can also send in-game messages in your name.
 
 **What it does:** builds and upgrades provinces, researches, trains units, trades on the market, attacks and defends (gathering its armies, learning from lost provinces), reads the in-game newspaper to find weak players, applies to coalitions, offers peace when it is losing, and answers simple messages in a casual voice (questions are left for you). It plays several games at once and has a dashboard (and optional Discord control).
+
+## See it
+
+<p align="center"><img src="docs/img/dashboard-home.png" alt="Neurocom dashboard home: plain-English summary, key numbers and trend charts" width="92%"></p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/img/dashboard-economy.png" alt="Economy tab: stockpile, what the bot is waiting to afford, market orders"></td>
+    <td width="50%"><img src="docs/img/dashboard-settings.png" alt="Settings tab: play style presets and switches"></td>
+  </tr>
+</table>
+
+Hover any chart for the exact numbers at that moment. Everything the bot decides is explained in plain English, and anything it will not guess at (a question from another player) is left for you.
 
 ## Quick start (Windows)
 

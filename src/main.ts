@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import { GameManager } from "./manager.js";
 import { startDashboard } from "./dashboard/server.js";
+import { printBanner } from "./banner.js";
 
 if (existsSync(".env")) { try { process.loadEnvFile(".env"); } catch { /* ignore a malformed .env */ } }
 
+printBanner();
 const manager = new GameManager();
 startDashboard(manager, Number(process.env.PORT ?? 8787));
 // Discord is optional: a missing/invalid token must never stop the game bot.

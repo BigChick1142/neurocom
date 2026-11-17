@@ -7,6 +7,11 @@ import { readFileSync } from "node:fs";
 import { researchName } from "../bot/rules.js";
 import type { Bot } from "../bot/runner.js";
 import type { GameManager } from "../manager.js";
+import { appIdFromToken, detect, listChannels, saveEnv, validateIds } from "../discord/setup.js";
+
+// discord/bot.ts imports this file, so it is loaded lazily to avoid a circular import (and so a missing discord.js never breaks the dashboard).
+const discordMod = () => import("../discord/bot.js");
+const savedDiscord = () => ({ hasToken: !!process.env.DISCORD_TOKEN, guildId: process.env.DISCORD_GUILD_ID || "", channelId: process.env.DISCORD_CHANNEL_ID || "", ownerId: process.env.DISCORD_OWNER_ID || "" });
 import { assessThreats } from "../bot/brain.js";
 import { narrate } from "./narrative.js";
 import { learnedDefence } from "../bot/intel.js";
@@ -128,6 +133,7 @@ export function startDashboard(manager: GameManager, port = 8787) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/games") return json(res, 200, manager.list());
+      if (req.method === "GET" && url.pathname === "/api/discord/status") { const m = await discordMod().catch(() => null); return json(res, 200, { ...(m ? m.discordStatus() : { configured: false, connected: false, lastError: "Discord support is not installed (run npm install)." }), saved: savedDiscord() }); }
       if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, statusFor(manager, pick(gameParam)));
       if (req.method === "GET" && url.pathname === "/api/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -140,6 +146,32 @@ export function startDashboard(manager: GameManager, port = 8787) {
         if (req.headers["x-bot-token"] !== token) return json(res, 403, { error: "bad token" });
         const body = await readBody(req);
         if (url.pathname === "/api/addgame") { await manager.openTab(); return json(res, 200, { ok: true }); }
+
+        // ---- Discord setup (global, not per game). The token is only sent to discord.com and never returned.
+        if (url.pathname.startsWith("/api/discord/")) {
+          const token = String(body.token ?? "").trim() || process.env.DISCORD_TOKEN || "";
+          if (url.pathname === "/api/discord/detect") return json(res, 200, await detect(token));
+          if (url.pathname === "/api/discord/channels") return json(res, 200, await listChannels(token, String(body.guildId ?? "")));
+          if (url.pathname === "/api/discord/save") {
+            const ids = { guildId: String(body.guildId ?? "").trim(), channelId: String(body.channelId ?? "").trim(), ownerId: String(body.ownerId ?? "").trim() };
+            const bad = validateIds(ids);
+            if (bad) return json(res, 400, { ok: false, error: bad });
+            const found = await detect(token);
+            if (!found.ok) return json(res, 400, { ok: false, error: found.error });
+            saveEnv({ DISCORD_TOKEN: token, DISCORD_APP_ID: found.appId ?? appIdFromToken(token) ?? "", DISCORD_GUILD_ID: ids.guildId, DISCORD_CHANNEL_ID: ids.channelId, DISCORD_OWNER_ID: ids.ownerId });
+            const m = await discordMod();
+            await m.startDiscord(manager);
+            return json(res, 200, { ok: true, status: m.discordStatus(), saved: savedDiscord() });
+          }
+          if (url.pathname === "/api/discord/test") { const m = await discordMod(); return json(res, 200, { ok: m.sendDiscordTest() }); }
+          if (url.pathname === "/api/discord/disconnect") {
+            const m = await discordMod();
+            await m.stopDiscord();
+            if (body.forget) saveEnv({ DISCORD_TOKEN: "", DISCORD_APP_ID: "", DISCORD_GUILD_ID: "", DISCORD_CHANNEL_ID: "", DISCORD_OWNER_ID: "" });
+            return json(res, 200, { ok: true, status: m.discordStatus(), saved: savedDiscord() });
+          }
+          return json(res, 404, { error: "not found" });
+        }
         const bot = pick(gameParam);
         if (!bot) return json(res, 409, { error: "no game is open yet" });
         if (url.pathname === "/api/settings") { bot.updateSettings(body); return json(res, 200, { ok: true, settings: bot.settings }); }

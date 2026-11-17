@@ -147,6 +147,10 @@
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
   .seg button { border:0; background:transparent; padding:6px 14px; font-size:14px; }
   .seg button[aria-pressed="true"] { background:var(--accent); color:var(--on-accent); }
+  .dc-steps { margin:8px 0 0; padding-left:20px; color:var(--muted); } .dc-steps li { margin:4px 0; }
+  .dc-line { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top:10px; } .dc-line > * { flex:1 1 200px; }
+  .dc-line .btn { flex:0 0 auto; }
+  .dc-ok { color:var(--ok); } .dc-bad { color:var(--bad); } .dc-note { margin-top:8px; font-size:13.5px; color:var(--muted); }
   .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:8px 16px; border-radius:99px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; }
   .toast.show { opacity:1; }
   .hidden { display:none !important; }
@@ -190,7 +194,7 @@ const relTag = (r) => { const x = r === null || r === undefined ? ["War (default
 let currentGame = null;
 const gq = () => (currentGame ? "?game=" + encodeURIComponent(currentGame) : "");
 async function post(path, body) {
-  const r = await fetch(path + (path === "/api/addgame" ? "" : gq()), { method: "POST", headers: { "content-type": "application/json", "x-bot-token": TOKEN }, body: JSON.stringify(body) });
+  const r = await fetch(path + (path === "/api/addgame" || path.startsWith("/api/discord/") ? "" : gq()), { method: "POST", headers: { "content-type": "application/json", "x-bot-token": TOKEN }, body: JSON.stringify(body) });
   if (!r.ok) { toast("That didn't save (" + r.status + ")"); throw new Error(r.status); }
   return r.json();
 }
@@ -405,6 +409,7 @@ function viewSettings() {
       <div class="row"><div class="what"><b>Allow nuclear and chemical weapons</b><div>Off is strongly recommended: it wrecks morale and relations.</div></div><label class="switch"><input type="checkbox" data-sw="allowWmd" ${st.allowWmd ? "checked" : ""} aria-label="Allow weapons of mass destruction"><span></span></label></div></section>
     <section class="card"><h2>Who it may attack</h2><div class="seg" id="wp">${[["none", "Nobody"], ["ai_only", "Computer nations only"], ["non_allies", "Anyone who isn't an ally"]].map(([k, t]) => `<button data-wp="${k}" aria-pressed="${st.warPolicy === k}">${t}</button>`).join("")}</div>
       <p class="sub" style="margin-top:8px">Coalition mates and allies are always protected.</p></section>
+    <section class="card" id="discord-card"><h2>Discord <small>optional: alerts and commands on your phone</small></h2><div class="empty">Loading…</div></section>
     <section class="card"><details><summary>Advanced numbers</summary>
       <div class="grid2">
         <label class="f">Mode when auto is off<select data-num="mode">${["economy", "balanced", "aggressive"].map((m) => `<option ${st.mode === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
@@ -415,6 +420,110 @@ function viewSettings() {
         <label class="f">Money to keep in reserve<input type="number" min="0" step="100" data-nested="reserve.20" value="${st.reserve["20"] ?? 0}"></label>
       </div><p class="sub" style="margin-top:10px">The bot also tunes the margin and unit cap by itself from results.</p></details></section></div>`;
 }
+
+/* ---------- Discord setup card ---------- */
+const DC = { status: null, loaded: false, token: "", info: null, guildId: "", channels: null, channelId: "", ownerId: "", busy: false, msg: "", err: "", editing: false };
+async function dcCall(path, body) {
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-bot-token": TOKEN }, body: JSON.stringify(body || {}) });
+    return await r.json();
+  } catch { return { ok: false, error: "Could not reach Neurocom. Is it still running?" }; }
+}
+async function dcLoad() {
+  DC.loaded = true;
+  try { DC.status = await (await fetch("/api/discord/status")).json(); } catch { DC.status = null; }
+  dcRender();
+}
+function dcRender() {
+  const el = $("discord-card"); if (!el) return;
+  const st = DC.status, saved = st?.saved || {};
+  const head = `<h2>Discord <small>optional: alerts and commands on your phone</small></h2>`;
+  const msg = (DC.err ? `<p class="dc-note dc-bad">${esc(DC.err)}</p>` : "") + (DC.msg ? `<p class="dc-note dc-ok">${esc(DC.msg)}</p>` : "");
+  if (st && st.connected && !DC.editing) {
+    el.innerHTML = head + `<p><b class="dc-ok">Connected</b> as <b>${esc(st.botName || "your bot")}</b>${st.guildName ? ` in <b>${esc(st.guildName)}</b>` : ""}.</p>
+      <p class="sub">${st.channelOk ? "Alerts go to your chosen channel." : "Alerts go to your direct messages (no channel is set, or the bot cannot reach it)."} ${st.ownerSet ? "Commands work for you only." : "<b class='dc-bad'>No owner is set, so slash commands are refused.</b>"}</p>
+      <div class="row" style="border:0;gap:8px;justify-content:flex-start;flex-wrap:wrap"><button class="btn small" data-dc="test">Send a test message</button><button class="btn small" data-dc="change">Change settings</button><button class="btn small" data-dc="disconnect">Disconnect</button><button class="btn small" data-dc="forget">Disconnect and forget my token</button></div>
+      <p class="dc-note">Slash commands in your server: /status /report /pause /resume /reply /games. Your token is kept in the .env file on this PC only.</p>` + msg;
+    return;
+  }
+  const info = DC.info;
+  const steps = `<details ${st && st.saved?.hasToken ? "" : "open"}><summary>Don't have a Discord bot yet? Make one in 2 minutes</summary><ol class="dc-steps">
+      <li>Open the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Discord Developer Portal</a> and click <b>New Application</b>. Name it, for example, Neurocom.</li>
+      <li>Open the <b>Bot</b> tab on the left and click <b>Reset Token</b>. Copy the token it shows once.</li>
+      <li>Paste it below and press <b>Check token</b>. Neurocom finds the rest by itself.</li></ol>
+      <p class="dc-note">Treat the token like a password. It is stored only in the .env file on this computer and is sent only to Discord.</p></details>`;
+  let body = `<div class="dc-line"><label class="f">Bot token<input type="password" autocomplete="off" spellcheck="false" placeholder="${saved.hasToken ? "a token is already saved: paste a new one to replace it, or just press Check" : "paste the token here"}" value="${esc(DC.token)}" data-dc-in="token"></label><button class="btn primary" data-dc="check" ${DC.busy ? "disabled" : ""}>${DC.busy ? "Checking…" : "Check token"}</button></div>`;
+  if (info && info.ok) {
+    const guilds = info.guilds || [];
+    body += `<p class="dc-note dc-ok">✓ Token works: <b>${esc(info.botName)}</b></p>`;
+    if (!guilds.length) {
+      body += `<p class="dc-note"><b>Next:</b> add the bot to your server: <a class="btn small" href="${esc(info.inviteUrl)}" target="_blank" rel="noopener">Invite the bot to my server</a> then press <b>Check token</b> again.</p>`;
+    } else {
+      body += `<div class="dc-line"><label class="f">Server<select data-dc-sel="guild">${guilds.map((g) => `<option value="${esc(g.id)}" ${g.id === DC.guildId ? "selected" : ""}>${esc(g.name)}</option>`).join("")}</select></label>
+        <label class="f">Where alerts go<select data-dc-sel="channel"><option value="">My direct messages (no channel)</option>${(DC.channels || []).map((c) => `<option value="${esc(c.id)}" ${c.id === DC.channelId ? "selected" : ""}>#${esc(c.name)}</option>`).join("")}</select></label></div>`;
+      if (DC.channels && !DC.channels.length) body += `<p class="dc-note">The bot sees no text channel in that server. Create one (for example #neurocom), give the bot access to it, then press Check token again, or keep alerts in your direct messages.</p>`;
+      body += `<div class="dc-line"><label class="f">Who may command the bot (your Discord user id)<input type="text" inputmode="numeric" placeholder="${info.owner ? "" : "paste your user id"}" value="${esc(DC.ownerId)}" data-dc-in="ownerId"></label><button class="btn primary" data-dc="save" ${DC.busy ? "disabled" : ""}>Save and connect</button></div>
+        <p class="dc-note">${info.owner ? `Filled in with the owner of this bot app (<b>${esc(info.owner.name)}</b>). ` : ""}To find any user id: Discord Settings → Advanced → turn on Developer Mode, then right-click your name → Copy User ID.</p>`;
+    }
+    body += `<p class="dc-note">Invite link, if you need it again: <a href="${esc(info.inviteUrl)}" target="_blank" rel="noopener">add the bot to a server</a>.</p>`;
+  }
+  if (st && st.lastError && !DC.err) body += `<p class="dc-note dc-bad">${esc(st.lastError)}</p>`;
+  el.innerHTML = head + steps + body + msg;
+}
+async function dcAction(what) {
+  DC.err = ""; DC.msg = "";
+  if (what === "check") {
+    DC.busy = true; dcRender();
+    const r = await dcCall("/api/discord/detect", { token: DC.token });
+    DC.busy = false;
+    if (!r.ok) { DC.err = r.error || "That did not work."; DC.info = null; dcRender(); return; }
+    DC.info = r;
+    DC.guildId = (r.guilds && r.guilds[0] && (r.guilds.find((g) => g.id === DC.guildId) || r.guilds[0]).id) || "";
+    DC.ownerId = DC.ownerId || (r.owner ? r.owner.id : "");
+    DC.channels = null; DC.channelId = "";
+    dcRender();
+    if (DC.guildId) await dcChannels();
+    return;
+  }
+  if (what === "save") {
+    DC.busy = true; dcRender();
+    const r = await dcCall("/api/discord/save", { token: DC.token, guildId: DC.guildId, channelId: DC.channelId, ownerId: DC.ownerId });
+    DC.busy = false;
+    if (!r.ok) { DC.err = r.error || "Could not save."; dcRender(); return; }
+    DC.editing = false; DC.token = ""; DC.info = null;
+    DC.status = { ...(r.status || {}), saved: r.saved };
+    DC.msg = "Saved. Neurocom is connecting: a message should arrive in a few seconds.";
+    dcRender();
+    setTimeout(dcLoad, 4000); // give it a moment to log in, then refresh the status
+    return;
+  }
+  if (what === "test") { const r = await dcCall("/api/discord/test", {}); DC.msg = r.ok ? "Test message sent. Check Discord." : "Not connected."; dcRender(); return; }
+  if (what === "change") { DC.editing = true; dcRender(); return; }
+  if (what === "disconnect" || what === "forget") {
+    if (what === "forget" && !confirm("Disconnect Discord and delete the saved token from this computer?")) return;
+    const r = await dcCall("/api/discord/disconnect", { forget: what === "forget" });
+    DC.status = { ...(r.status || {}), saved: r.saved }; DC.msg = what === "forget" ? "Disconnected and the token was removed." : "Disconnected. Your settings are kept."; DC.editing = false;
+    dcRender();
+  }
+}
+async function dcChannels() {
+  if (!DC.guildId) return;
+  const r = await dcCall("/api/discord/channels", { token: DC.token, guildId: DC.guildId });
+  DC.channels = r.ok ? r.channels : [];
+  // Never guess a random channel: keep the saved one, else one that is clearly meant for this, else direct messages.
+  if (!DC.channelId) {
+    const savedId = DC.status && DC.status.saved ? DC.status.saved.channelId : "";
+    const pick = DC.channels.find((c) => c.id === savedId) || DC.channels.find((c) => /neurocom|alert/i.test(c.name));
+    DC.channelId = pick ? pick.id : "";
+  }
+  dcRender();
+}
+document.addEventListener("input", (e) => { const k = e.target.dataset && e.target.dataset.dcIn; if (k) DC[k] = e.target.value; });
+document.addEventListener("change", (e) => {
+  const k = e.target.dataset && e.target.dataset.dcSel;
+  if (k === "guild") { DC.guildId = e.target.value; DC.channels = null; DC.channelId = ""; dcRender(); dcChannels(); }
+  if (k === "channel") DC.channelId = e.target.value;
+});
 
 /* ---------- wiring ---------- */
 const VIEWS = { home: viewHome, military: viewMilitary, economy: viewEconomy, diplomacy: viewDiplomacy, activity: viewActivity, settings: viewSettings };
@@ -458,6 +567,7 @@ function render() {
   lastSettingsSig = sig;
   $("main").dataset.tab = tab;
   $("main").innerHTML = VIEWS[tab]();
+  if (tab === "settings") { dcRender(); if (!DC.loaded) dcLoad(); }
   if (keepFocus) { const el = $("pf"); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
 }
 function switchGame(id) {
@@ -468,6 +578,7 @@ function switchGame(id) {
 document.addEventListener("change", (e) => { if (e.target.id === "game") switchGame(e.target.value); });
 document.addEventListener("click", (e) => {
   if (e.target.closest("#addgame,#addgame2")) { post("/api/addgame", {}).then(() => toast("Opened a new tab on the game site: pick a game there")); return; }
+  if (e.target.closest("[data-dc]")) { dcAction(e.target.closest("[data-dc]").dataset.dc); return; }
   const t = e.target.closest("[data-tab],[data-lf],[data-range],[data-preset],[data-wp],[data-dismiss],[data-reply],#pause,#theme"); if (!t) return;
   if (t.dataset.tab) { tab = t.dataset.tab; store.set("tab", tab); render(); }
   else if (t.dataset.lf) { logFilter = t.dataset.lf; render(); }

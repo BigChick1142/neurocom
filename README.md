@@ -31,6 +31,8 @@ dashboard shows everything and lets you steer.
   </tr>
 </table>
 
+<p align="center"><img src="docs/img/dashboard-discord.png" alt="Discord setup card: paste a bot token, pick a server and channel" width="92%"></p>
+
 Hover any chart for the exact numbers at that moment. Everything the bot decides is explained in plain English, and anything it will not guess at (a question from another player) is left for you.
 
 ## Quick start (Windows)
@@ -45,7 +47,13 @@ Optional: set the environment variable `CON_BROWSER_CHANNEL=chrome` (or `msedge`
 
 ## Discord (optional)
 
-Create an application and bot at the [Discord Developer Portal](https://discord.com/developers/applications), invite it to your server with the scopes `bot` and `applications.commands` (permissions: View Channel, Send Messages, Embed Links), then copy `.env.example` to `.env` and fill in the token, application id, server id, alerts channel id and your own user id. You get alerts (province lost or captured, capital threatened, messages needing you, errors) and owner-only commands `/status`, `/report`, `/pause`, `/resume`, `/reply`, `/games`. **Never share or commit your `.env`** (it is in `.gitignore`); if a token ever leaks, reset it in the Developer Portal.
+Set it up from the dashboard: **Settings → Discord**. You only paste the bot token.
+
+1. Make a bot (about 2 minutes): open the [Discord Developer Portal](https://discord.com/developers/applications), click **New Application**, then on the **Bot** tab click **Reset Token** and copy it.
+2. Paste the token in the Discord card and press **Check token**. Neurocom finds the bot's application id by itself, offers an **invite link** (if the bot is not in your server yet), lists your servers and channels in dropdowns, and fills in your user id (the owner of the bot app).
+3. Press **Save and connect**. A message arrives in Discord within seconds. Use **Send a test message** any time.
+
+You get alerts (province lost or captured, capital threatened, messages needing you, errors) in the channel you picked, or in your direct messages if you pick none, plus owner-only slash commands `/status`, `/report`, `/pause`, `/resume`, `/reply`, `/games`. Your token is stored only in the `.env` file on your computer (it is in `.gitignore`) and is sent only to Discord; **never share or commit it**, and reset it in the Developer Portal if it ever leaks. (Prefer files? Copy `.env.example` to `.env` and fill it in; the dashboard and the file stay in sync.)
 
 ## Playing several games
 

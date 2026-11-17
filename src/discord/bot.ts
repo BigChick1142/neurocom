@@ -5,6 +5,7 @@ import { Client, EmbedBuilder, GatewayIntentBits, MessageFlags, REST, Routes, Sl
 import type { Bot, LogEntry } from "../bot/runner.js";
 import type { GameManager } from "../manager.js";
 import { status } from "../dashboard/server.js";
+import { appIdFromToken } from "./setup.js";
 
 const gameOption = (o: import("discord.js").SlashCommandStringOption) => o.setName("game").setDescription("Which game (nation, player name or game id). Optional when only one is open");
 const COMMANDS = [
@@ -36,9 +37,32 @@ export function alertFor(e: LogEntry): string | null {
   }
 }
 
+export interface DiscordStatus { configured: boolean; connected: boolean; botName: string | null; guildName: string | null; channelOk: boolean | null; ownerSet: boolean; lastError: string | null }
+let state: DiscordStatus = { configured: false, connected: false, botName: null, guildName: null, channelOk: null, ownerSet: false, lastError: null };
+let active: { client: Client; stop: () => void; alert: (text: string) => void } | null = null;
+export const discordStatus = (): DiscordStatus => ({ ...state });
+
+/** Disconnect and clean up (the saved settings stay in .env). */
+export async function stopDiscord(): Promise<void> {
+  const a = active; active = null;
+  if (a) { a.stop(); await a.client.destroy().catch(() => {}); }
+  state = { ...state, connected: false, botName: null, guildName: null, channelOk: null };
+}
+
+/** Post a test message the same way real alerts are delivered (channel, else a DM to the owner). */
+export function sendDiscordTest(): boolean {
+  if (!active) return false;
+  active.alert("✅ Test from Neurocom: alerts are working.");
+  return true;
+}
+
 export async function startDiscord(manager: GameManager): Promise<void> {
-  const token = process.env.DISCORD_TOKEN, appId = process.env.DISCORD_APP_ID;
+  await stopDiscord();
+  const token = process.env.DISCORD_TOKEN;
+  const appId = process.env.DISCORD_APP_ID || (token ? appIdFromToken(token) : null) || "";
+  state = { configured: !!(token && appId), connected: false, botName: null, guildName: null, channelOk: null, ownerSet: !!process.env.DISCORD_OWNER_ID, lastError: null };
   if (!token || !appId) return; // not configured: the bot runs without Discord
+  const disposers: (() => void)[] = [];
   const guildId = process.env.DISCORD_GUILD_ID || "", channelId = process.env.DISCORD_CHANNEL_ID || "", ownerId = process.env.DISCORD_OWNER_ID || "";
 
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -70,10 +94,15 @@ export async function startDiscord(manager: GameManager): Promise<void> {
   const alert = (text: string) => { if (queue.length < 30) queue.push(text); if (!pump) pump = setTimeout(flush, 800); };
   // With several games running, say which one an alert is about.
   const tag = (bot: Bot) => (manager.bots.size > 1 ? `**[${bot.state?.me.nation ?? bot.gameId}]** ` : "");
-  const listen = (bot: Bot) => bot.on("log", (e: LogEntry) => { const a = alertFor(e); if (a) alert(tag(bot) + a); });
+  const listen = (bot: Bot) => {
+    const fn = (e: LogEntry) => { const a = alertFor(e); if (a) alert(tag(bot) + a); };
+    bot.on("log", fn); disposers.push(() => bot.off("log", fn));
+  };
   for (const b of manager.bots.values()) listen(b);
-  manager.on("bot-added", (bot: Bot) => { listen(bot); alert(`🎮 Now playing game ${bot.gameId}.`); });
-  manager.on("bot-removed", (id: string) => alert(`⏹️ Stopped playing game ${id}.`));
+  const onAdded = (bot: Bot) => { listen(bot); alert(`🎮 Now playing game ${bot.gameId}.`); };
+  const onRemoved = (id: string) => alert(`⏹️ Stopped playing game ${id}.`);
+  manager.on("bot-added", onAdded); manager.on("bot-removed", onRemoved);
+  disposers.push(() => { manager.off("bot-added", onAdded); manager.off("bot-removed", onRemoved); });
 
   const statusEmbed = (bot: Bot) => {
     const st = status(bot), s = st.state;
@@ -128,14 +157,19 @@ export async function startDiscord(manager: GameManager): Promise<void> {
 
   client.on("interactionCreate", (i) => { if (i.isChatInputCommand()) handle(i).catch((e) => console.error("discord command failed:", e)); });
   client.once("clientReady", async () => {
+    state.connected = true; state.botName = client.user?.tag ?? null;
     console.log(`Discord: logged in as ${client.user?.tag}${ownerId ? "" : " (owner not set: commands are refused)"}`);
+    state.guildName = guildId ? (client.guilds.cache.get(guildId)?.name ?? null) : null;
+    if (channelId) { try { const ch = await client.channels.fetch(channelId); state.channelOk = !!ch?.isTextBased(); } catch { state.channelOk = false; } }
     try {
       await rest.put(guildId ? Routes.applicationGuildCommands(appId, guildId) : Routes.applicationCommands(appId), { body: COMMANDS });
       // Commands live in exactly one place: when a server id is set, remove any global copies (they show up as duplicates in the menu).
       if (guildId) await rest.put(Routes.applicationCommands(appId), { body: [] });
-    } catch (e) { console.error("discord: could not register commands:", (e as Error).message); }
-    if (channelId || ownerId) alert("🤖 Bot online. Use /games or /status.");
+    } catch (e) { state.lastError = "Could not register the slash commands: " + (e as Error).message; console.error("discord: could not register commands:", (e as Error).message); }
+    if (channelId || ownerId) alert("🤖 Neurocom is online. Use /games or /status.");
   });
-  client.on("error", (e) => console.error("discord error:", e.message));
-  await client.login(token);
+  client.on("error", (e) => { state.lastError = e.message; console.error("discord error:", e.message); });
+  active = { client, alert, stop: () => { disposers.forEach((d) => d()); if (pump) clearTimeout(pump); pump = null; queue.length = 0; } };
+  try { await client.login(token); }
+  catch (e) { state.lastError = /token/i.test((e as Error).message) ? "Discord rejected the bot token." : (e as Error).message; console.error("discord: login failed:", (e as Error).message); await stopDiscord(); }
 }

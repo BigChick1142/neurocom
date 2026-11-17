@@ -12,6 +12,7 @@ import { mkdtempSync, writeFileSync as wf, existsSync as ex, mkdirSync as mk, rm
 import { tmpdir } from "node:os";
 import { join as pj } from "node:path";
 import { setRulesDir } from "../src/bot/rules.js";
+import { appIdFromToken, mergeEnv, validateIds, inviteUrl } from "../src/discord/setup.js";
 
 // Self-contained rules fixture: the tests must not depend on the game's own rule tables (those are read from the game at
 // runtime and are not part of this repository).
@@ -620,6 +621,22 @@ ok("multi-game: the game id is read from the client URL; the first game inherits
     mk(pj(a), { recursive: true }); wf(pj(a, "history.jsonl"), "1\n");
     assert.equal(defaultGameDir(root), a, "tools default to the most recently active game");
   } finally { rm(root, { recursive: true, force: true }); }
+});
+ok("discord setup: the app id comes from the token, .env keeps other lines, ids and tokens are validated", () => {
+  // a made-up token: base64("123456789012345678") + two dummy segments
+  const fake = Buffer.from("123456789012345678").toString("base64").replace(/=+$/, "") + ".AbCdEf.xyzxyzxyzxyzxyzxyzxyzxyzxyz";
+  assert.equal(appIdFromToken(fake), "123456789012345678");
+  assert.equal(appIdFromToken("not a token"), null);
+  assert.equal(appIdFromToken(""), null);
+  assert.ok(inviteUrl("123456789012345678").includes("client_id=123456789012345678") && inviteUrl("1").includes("applications.commands"));
+  const before = "# my secrets\nPORT=9000\nDISCORD_TOKEN=old\n\n";
+  const after = mergeEnv(before, { DISCORD_TOKEN: "new", DISCORD_GUILD_ID: "111111111111111111" });
+  assert.ok(after.includes("# my secrets") && after.includes("PORT=9000"), "other lines survive");
+  assert.ok(after.includes("DISCORD_TOKEN=new") && !after.includes("DISCORD_TOKEN=old"), "existing key replaced, not duplicated");
+  assert.ok(after.includes("DISCORD_GUILD_ID=111111111111111111") && after.endsWith("\n"));
+  assert.equal((after.match(/DISCORD_TOKEN=/g) ?? []).length, 1);
+  assert.equal(validateIds({ guildId: "123456789012345678", channelId: "", ownerId: "123456789012345678" }), null);
+  assert.ok(validateIds({ guildId: "abc" }) !== null && validateIds({ ownerId: "12" }) !== null);
 });
 ok("auto mode: economy early, balanced mid, aggressive only with strength + money", () => {
   const s = base(); s.day = 1;

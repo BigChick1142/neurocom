@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neurocom</title>
+<style>
+  :root {
+    --bg:#0d1117; --surface:#151b23; --raised:#1b232d; --line:#27313d; --text:#e8eef5; --muted:#92a0b1; --faint:#5d6b7c;
+    --accent:#58a6ff; --accent-bg:rgba(88,166,255,.14);
+    --ok:#3fb950; --ok-bg:rgba(63,185,80,.14); --warn:#e3b341; --warn-bg:rgba(227,179,65,.14); --bad:#f85149; --bad-bg:rgba(248,81,73,.14);
+    --radius:12px; color-scheme:dark;
+  }
+  :root[data-theme="light"] {
+    --bg:#f3f5f8; --surface:#ffffff; --raised:#f0f3f7; --line:#dbe2ea; --text:#14202c; --muted:#556575; --faint:#8a97a6;
+    --accent:#0b62d6; --accent-bg:rgba(11,98,214,.10); --ok:#1a7f37; --ok-bg:rgba(26,127,55,.10); --warn:#8a6100; --warn-bg:rgba(154,103,0,.12); --bad:#c62828; --bad-bg:rgba(198,40,40,.09);
+    color-scheme:light;
+  }
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  h1,h2,h3,p { margin:0; }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  .num { font-variant-numeric:tabular-nums; }
+
+  /* header */
+  header { position:sticky; top:0; z-index:10; background:var(--surface); border-bottom:1px solid var(--line); }
+  .bar { max-width:1180px; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .brand { font-weight:700; letter-spacing:.2px; }
+  .status { display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--muted); }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); flex:none; }
+  .dot.on { background:var(--ok); }
+  .vpwrap { flex:1; min-width:200px; max-width:460px; }
+  .vptext { font-size:13px; color:var(--muted); display:flex; justify-content:space-between; gap:8px; }
+  .vptext b { color:var(--text); font-weight:600; }
+  .track { height:8px; border-radius:99px; background:var(--raised); overflow:hidden; margin-top:4px; }
+  .track > i { display:block; height:100%; background:var(--accent); border-radius:99px; min-width:2px; transition:width .4s; }
+  .actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .btn { border:1px solid var(--line); background:var(--raised); padding:6px 14px; border-radius:9px; font-size:14px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .btn.stop { background:var(--bad-bg); border-color:var(--bad); color:var(--bad); font-weight:600; }
+  .btn.small { padding:3px 10px; font-size:13px; }
+  .btn:focus-visible, .tab:focus-visible, .seg button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  nav { max-width:1180px; margin:0 auto; padding:0 12px; display:flex; gap:2px; overflow-x:auto; }
+  .tab { background:none; border:0; border-bottom:2px solid transparent; padding:10px 14px; color:var(--muted); white-space:nowrap; font-size:14.5px; }
+  .tab:hover { color:var(--text); }
+  .tab[aria-selected="true"] { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
+  .badge { display:inline-block; min-width:18px; padding:0 6px; margin-left:6px; border-radius:99px; background:var(--warn); color:#111; font-size:12px; font-weight:700; text-align:center; }
+
+  main { max-width:1180px; margin:0 auto; padding:18px 16px 60px; }
+  .stack { display:grid; gap:16px; }
+  .cols { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; min-width:0; }
+  .card > h2 { font-size:13px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; margin-bottom:10px; }
+  .card > h2 small { text-transform:none; letter-spacing:0; font-weight:400; color:var(--faint); margin-left:6px; }
+  .sub { color:var(--muted); font-size:13.5px; }
+
+  /* hero */
+  .hero { border-left:4px solid var(--ok); }
+  .hero.warn { border-left-color:var(--warn); } .hero.bad { border-left-color:var(--bad); }
+  .hero h1 { font-size:21px; line-height:1.3; margin-bottom:8px; }
+  .hero ul { margin:0; padding-left:18px; color:var(--muted); }
+  .hero li { margin:3px 0; }
+  .attn { display:grid; gap:8px; }
+  .attn .item { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:9px; background:var(--raised); }
+  .attn .item.warn { background:var(--warn-bg); } .attn .item.bad { background:var(--bad-bg); }
+  .attn .ico { flex:none; font-weight:700; }
+  .kpis { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  .kpi { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; }
+  .kpi .l { font-size:12.5px; color:var(--muted); }
+  .kpi .v { font-size:26px; font-weight:650; line-height:1.2; }
+  .kpi .d { font-size:12.5px; color:var(--muted); }
+  .up { color:var(--ok); } .down { color:var(--bad); }
+  .chart .plot { position:relative; touch-action:pan-y; cursor:crosshair; }
+  .chart svg { width:100%; height:96px; display:block; }
+  .chart .xh { position:absolute; top:0; bottom:0; width:1px; background:var(--muted); opacity:.7; display:none; pointer-events:none; }
+  .chart .dotm { position:absolute; width:11px; height:11px; border-radius:50%; border:2px solid var(--surface); transform:translate(-50%,-50%); display:none; pointer-events:none; }
+  .chart .tip { position:absolute; top:2px; z-index:6; min-width:168px; background:var(--raised); border:1px solid var(--line); border-radius:9px; padding:8px 11px; font-size:13px; box-shadow:0 8px 22px rgba(0,0,0,.4); pointer-events:none; display:none; }
+  .chart .tip .when { color:var(--muted); font-size:12px; margin-bottom:3px; }
+  .chart .tip .big { font-size:20px; font-weight:650; line-height:1.2; }
+  .chart .tip table { margin-top:6px; } .chart .tip td { padding:1px 0; border:0; font-size:13px; } .chart .tip td:last-child { text-align:right; padding-left:14px; font-variant-numeric:tabular-nums; }
+  .chart .axis { display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint); margin-top:3px; }
+  .chart .ttl { display:flex; justify-content:space-between; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  .chart .ttl b { color:var(--text); }
+
+  /* lists & tables */
+  .list { display:grid; gap:0; }
+  .list > div { padding:8px 0; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:baseline; }
+  .list > div:last-child { border-bottom:0; }
+  .list .t { flex:none; width:64px; color:var(--faint); font-size:12.5px; }
+  .list .main { min-width:0; overflow-wrap:anywhere; }
+  .list .why { color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); font-size:14px; vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:12.5px; }
+  .scroll { overflow:auto; max-height:480px; }
+  .empty { color:var(--faint); padding:6px 0; }
+  .tag { display:inline-block; padding:1px 9px; border-radius:99px; font-size:12.5px; background:var(--raised); color:var(--muted); white-space:nowrap; }
+  .tag.ok { background:var(--ok-bg); color:var(--ok); } .tag.warn { background:var(--warn-bg); color:var(--warn); }
+  .tag.bad { background:var(--bad-bg); color:var(--bad); } .tag.blue { background:var(--accent-bg); color:var(--accent); }
+  .meter { height:7px; border-radius:99px; background:var(--raised); overflow:hidden; min-width:70px; }
+  .meter > i { display:block; height:100%; background:var(--accent); }
+  .meter.bad > i { background:var(--bad); } .meter.ok > i { background:var(--ok); }
+  .tiles { display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  .tile { background:var(--raised); border-radius:10px; padding:10px 12px; }
+  .tile .n { font-size:12.5px; color:var(--muted); display:flex; justify-content:space-between; gap:6px; }
+  .tile .v { font-size:20px; font-weight:600; }
+  .tile .r { font-size:12.5px; }
+
+  /* chat */
+  .thread { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
+  .thread.wait { border-color:var(--warn); background:var(--warn-bg); }
+  .thread h3 { font-size:14px; margin-bottom:6px; display:flex; justify-content:space-between; gap:8px; align-items:center; }
+  .bubble { max-width:86%; padding:6px 11px; border-radius:12px; margin:4px 0; background:var(--raised); font-size:14px; overflow-wrap:anywhere; }
+  .bubble.me { margin-left:auto; background:var(--accent-bg); }
+
+  /* settings */
+  .presets { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+  .preset { text-align:left; background:var(--raised); border:2px solid var(--line); border-radius:var(--radius); padding:12px 14px; }
+  .preset:hover { border-color:var(--accent); }
+  .preset[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-bg); }
+  .preset b { display:block; margin-bottom:3px; }
+  .row { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:0; }
+  .row .what b { font-weight:600; } .row .what div { color:var(--muted); font-size:13.5px; }
+  .switch { position:relative; width:44px; height:25px; flex:none; }
+  .switch input { opacity:0; position:absolute; inset:0; width:100%; height:100%; margin:0; cursor:pointer; }
+  .switch span { position:absolute; inset:0; background:var(--line); border-radius:99px; transition:.2s; pointer-events:none; }
+  .switch span::after { content:""; position:absolute; width:19px; height:19px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+  .switch input:checked + span { background:var(--ok); } .switch input:checked + span::after { transform:translateX(19px); }
+  .switch input:focus-visible + span { outline:2px solid var(--accent); outline-offset:2px; }
+  details summary { cursor:pointer; color:var(--muted); padding:6px 0; }
+  .grid2 { display:grid; gap:10px 16px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin-top:8px; }
+  label.f { display:grid; gap:3px; font-size:13px; color:var(--muted); }
+  input[type=number], input[type=text], select { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:6px 9px; width:100%; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+  .seg button { border:0; background:transparent; padding:6px 14px; font-size:14px; }
+  .seg button[aria-pressed="true"] { background:var(--accent); color:#fff; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:8px 16px; border-radius:99px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; }
+  .toast.show { opacity:1; }
+  .hidden { display:none !important; }
+  @media (max-width:560px){ .kpi .v{font-size:22px;} .hero h1{font-size:18px;} .actions{width:100%; margin-left:0;} }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <span class="brand">Neurocom</span>
+    <span class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
+    <select id="game" aria-label="Choose game" style="width:auto;max-width:230px"></select>
+    <button class="btn small" id="addgame" title="Open another tab on the game site so you can pick another game there">+ Add game</button>
+    <span class="status" id="who"></span>
+    <div class="vpwrap"><div class="vptext"><span>Victory points</span><span id="vptext"></span></div><div class="track"><i id="vpbar" style="width:0%"></i></div></div>
+    <div class="actions">
+      <button class="btn" id="theme" title="Switch light/dark" aria-label="Switch light or dark theme">Theme</button>
+      <button class="btn" id="pause"></button>
+    </div>
+  </div>
+  <nav role="tablist" id="tabs"></nav>
+</header>
+<main id="main"></main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const TABS = [["home","Home"],["military","Military"],["economy","Economy"],["diplomacy","Diplomacy"],["activity","Activity"],["settings","Settings"]];
+let S = null, tab = "home", logFilter = "important", playerFilter = "", lastSettingsSig = "";
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const n0 = (v) => Math.round(Number(v) || 0).toLocaleString();
+const n1 = (v) => (Math.round((Number(v) || 0) * 10) / 10).toLocaleString();
+const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + "m ago"; if (s < 86400) return Math.floor(s / 3600) + "h ago"; return Math.floor(s / 86400) + "d ago"; };
+const clock = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const REL = { "-2":["War","bad"], "-1":["Ceasefire","warn"], "0":["Embargo","warn"], "1":["Peace","ok"], "2":["Non-aggression","ok"], "3":["Right of way","ok"], "4":["Pact","ok"], "5":["Mutual protection","ok"], "6":["Shared intel","ok"], "7":["Army command","ok"] };
+const relTag = (r) => { const x = r === null || r === undefined ? ["War (default)","bad"] : (REL[String(r)] || ["Stance " + r, ""]); return `<span class="tag ${x[1]}">${esc(x[0])}</span>`; };
+
+let currentGame = null;
+const gq = () => (currentGame ? "?game=" + encodeURIComponent(currentGame) : "");
+async function post(path, body) {
+  const r = await fetch(path + (path === "/api/addgame" ? "" : gq()), { method: "POST", headers: { "content-type": "application/json", "x-bot-token": TOKEN }, body: JSON.stringify(body) });
+  if (!r.ok) { toast("That didn't save (" + r.status + ")"); throw new Error(r.status); }
+  return r.json();
+}
+const save = (patch, msg) => post("/api/settings", patch).then(() => toast(msg || "Saved"));
+function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove("show"), 1800); }
+
+/* ---------- small renderers ---------- */
+let chartRange = "all", hovering = false;
+const CHARTS = {};
+const stamp = (t) => new Date(t).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+const GEO = { w: 300, h: 86, pad: 6 };
+function histRows() {
+  const h = S.history || [];
+  if (chartRange === "all") return h;
+  const cut = Date.now() - (chartRange === "6h" ? 6 : 24) * 3600e3;
+  return h.filter((p) => p.t >= cut);
+}
+function spark(points, color) {
+  if (!points || points.length < 2) return { html: `<div class="empty">Collecting data…</div>`, lo: 0, hi: 1 };
+  const { w, h, pad } = GEO;
+  const lo = Math.min(...points), hi = Math.max(...points), span = hi - lo || 1;
+  const xy = points.map((v, i) => [pad + (i / (points.length - 1)) * (w - 2 * pad), h - pad - ((v - lo) / span) * (h - 2 * pad)]);
+  const line = xy.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  return { lo, hi, html: `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"><path d="${line} L${xy[xy.length-1][0]} ${h} L${xy[0][0]} ${h}Z" fill="${color}" opacity=".13"/><path d="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` };
+}
+function trendCard(title, key, color, fmt) {
+  const rows = histRows().filter((p) => typeof p[key] === "number");
+  const pts = rows.map((r) => r[key]);
+  const first = pts[0], last = pts[pts.length - 1];
+  const d = pts.length > 1 ? last - first : 0;
+  const sp = spark(pts, color);
+  CHARTS[key] = { rows, key, fmt, color, title, lo: sp.lo, hi: sp.hi };
+  const overlay = pts.length > 1 ? `<div class="xh"></div><div class="dotm" style="background:${color}"></div><div class="tip"></div>` : "";
+  const axis = rows.length > 1 ? `<div class="axis"><span>${stamp(rows[0].t)}</span><span>${stamp(rows[rows.length - 1].t)}</span></div>` : "";
+  return `<div class="card chart"><div class="ttl"><span>${title}</span><b class="num">${fmt(last ?? 0)} <span class="${d >= 0 ? "up" : "down"}">${d >= 0 ? "+" : ""}${fmt(d)}</span></b></div><div class="plot" data-chart="${key}">${sp.html}${overlay}</div>${axis}</div>`;
+}
+/* hover: a crosshair follows the pointer on all three charts (same moment); the hovered chart shows the full details for that moment */
+function hoverAt(plot, clientX) {
+  const c = CHARTS[plot.dataset.chart]; if (!c || c.rows.length < 2) return;
+  const rect = plot.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  const { w, pad } = GEO;
+  const i = Math.min(c.rows.length - 1, Math.max(0, Math.round(((frac * w - pad) / (w - 2 * pad)) * (c.rows.length - 1))));
+  document.querySelectorAll(".plot").forEach((pl) => {
+    const cc = CHARTS[pl.dataset.chart]; if (!cc || cc.rows.length <= i) return;
+    const x = (pad + (i / (cc.rows.length - 1)) * (w - 2 * pad)) / w * 100;
+    const v = cc.rows[i][cc.key], span = cc.hi - cc.lo || 1;
+    const y = (GEO.h - pad - ((v - cc.lo) / span) * (GEO.h - 2 * pad)) / GEO.h * 100;
+    const xh = pl.querySelector(".xh"), dot = pl.querySelector(".dotm"), tip = pl.querySelector(".tip");
+    if (!xh) return;
+    xh.style.display = "block"; xh.style.left = x + "%";
+    dot.style.display = "block"; dot.style.left = x + "%"; dot.style.top = y + "%";
+    if (pl === plot) {
+      const r = cc.rows[i], prev = i > 0 ? cc.rows[i - 1][cc.key] : v, start = cc.rows[0][cc.key];
+      const sg = (n) => (n >= 0 ? "+" : "") + cc.fmt(n);
+      tip.innerHTML = `<div class="when">${stamp(r.t)}${r.day ? " · game day " + r.day : ""}</div><div class="big">${cc.fmt(v)}</div><div class="sub">${sg(v - prev)} vs previous reading · ${sg(v - start)} since the start of this view</div><table><tr><td>Victory points</td><td>${n0(r.vp)}</td></tr><tr><td>Provinces</td><td>${n0(r.provinces)}</td></tr><tr><td>Units</td><td>${n0(r.units)}</td></tr><tr><td>Money</td><td>${n0(r.money)}</td></tr></table>`;
+      tip.style.display = "block";
+      if (x > 55) { tip.style.left = "auto"; tip.style.right = (100 - x + 3) + "%"; } else { tip.style.right = "auto"; tip.style.left = (x + 3) + "%"; }
+    } else tip.style.display = "none";
+  });
+}
+function endHover() {
+  hovering = false;
+  document.querySelectorAll(".plot .xh, .plot .dotm, .plot .tip").forEach((el) => { el.style.display = "none"; });
+  if (S) render(); // pick up anything that arrived while hovering
+}
+document.addEventListener("pointermove", (e) => {
+  const plot = e.target.closest && e.target.closest(".plot");
+  if (!plot) { if (hovering) endHover(); return; }
+  hovering = true; hoverAt(plot, e.clientX);
+});
+document.addEventListener("pointerleave", () => { if (hovering) endHover(); }, true);
+function table(head, rows, empty) {
+  if (!rows.length) return `<div class="empty">${esc(empty || "Nothing to show yet.")}</div>`;
+  return `<div class="scroll"><table><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+/* ---------- log wording ---------- */
+const KIND = {
+  conquest:["Captured","ok","imp"], loss:["Lost","bad","imp"], lesson:["Learned","blue","imp"], emergency:["Emergency","bad","imp"], opportunity:["Opportunity","blue","imp"], mode:["Mode","blue","imp"],
+  coalition_apply:["Coalition","blue","imp"], coalition_withdraw:["Coalition","blue","imp"], message:["Message","","imp"], relation:["Diplomacy","","imp"],
+  watchdog:["Reconnect","warn","imp"], boot:["Started","","imp"], setup:["Setup","blue","imp"], tuner:["Learning","blue","imp"], "no-effect":["Skipped","warn","imp"],
+  build:["Build","","act"], research:["Research","","act"], mobilize:["Train","","act"], move:["Move","","act"], market:["Market","","act"], cancel_order:["Market","","act"],
+  hold:["Waiting","","other"],
+};
+const kindOf = (l) => KIND[l.kind] || [l.kind, "", "other"];
+
+/* ---------- views ---------- */
+function viewHome() {
+  const s = S.state, N = S.narrative, me = s?.me;
+  const kp = (l, v, d) => `<div class="kpi"><div class="l">${l}</div><div class="v num">${v}</div><div class="d">${d || "&nbsp;"}</div></div>`;
+  const res = s?.resources || {};
+  const money = res["20"] || { amount: 0, perHour: 0 };
+  const units = (s?.armies || []).reduce((a, x) => a + x.units, 0);
+  const rank = s ? 1 + s.players.filter((p) => p.vps > me.vps).length : "-";
+  const hist = S.history || [];
+  const h0 = hist.length ? hist[0] : null;
+  const att = N.attention.map((a) => `<div class="item ${a.level}"><span class="ico">${a.level === "bad" ? "!" : a.level === "warn" ? "!" : "i"}</span><span>${esc(a.text)}</span></div>`).join("");
+  const plan = (S.plan || []).filter((p) => p.kind !== "move" || !/^Hold|ALERT/.test(p.label)).slice(0, 6);
+  const recent = S.logs.filter((l) => kindOf(l)[2] === "imp" && l.kind !== "boot").slice(-8).reverse();
+  return `<div class="stack">
+    <section class="card hero ${N.tone}"><h1>${esc(N.headline)}</h1><ul>${N.bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul></section>
+    ${att ? `<section class="card"><h2>Needs your attention</h2><div class="attn">${att}</div></section>` : ""}
+    <section class="kpis">
+      ${kp("Victory points", n0(me?.vps), `of ${n0(s?.vpLimit)} to win alone`)}
+      ${kp("Rank", "#" + rank, `of ${s ? s.players.filter((p) => p.vps > 0).length : "-"} scoring players`)}
+      ${kp("Provinces", n0(s?.provinces.length), h0 ? `${s.provinces.length - h0.provinces >= 0 ? "+" : ""}${s.provinces.length - h0.provinces} since start` : "")}
+      ${kp("Units", n0(units), `${(S.state?.armies || []).length} armies`)}
+      ${kp("Money", n0(money.amount), `<span class="${money.perHour >= 0 ? "up" : "down"}">${money.perHour >= 0 ? "+" : ""}${n0(money.perHour)}/h</span>`)}
+      ${kp("Game day", n0(s?.day), "")}
+    </section>
+    <section><div class="seg" style="margin-bottom:10px">${[["6h", "Last 6 hours"], ["24h", "Last 24 hours"], ["all", "Everything"]].map(([k, l]) => `<button data-range="${k}" aria-pressed="${chartRange === k}">${l}</button>`).join("")}</div><div class="cols">${trendCard("Victory points", "vp", "var(--accent)", n0)}${trendCard("Provinces", "provinces", "var(--ok)", n0)}${trendCard("Money", "money", "var(--warn)", n0)}</div><p class="sub" style="margin-top:6px">Hover (or touch and drag) a chart to see the exact numbers at that moment.</p></section>
+    <section class="cols">
+      <div class="card"><h2>What it just decided <small>this round</small></h2>${plan.length ? `<div class="list">${plan.map((p) => `<div><span class="main">${esc(p.label)}<div class="why">${esc(p.reason || "")}</div></span></div>`).join("")}</div>` : `<div class="empty">Nothing new to do right now. It's waiting for money, strength or time.</div>`}</div>
+      <div class="card"><h2>Recent events</h2>${recent.length ? `<div class="list">${recent.map((l) => { const k = kindOf(l); return `<div><span class="t">${clock(l.t)}</span><span class="main"><span class="tag ${k[1]}">${esc(k[0])}</span> ${esc(l.text)}</span></div>`; }).join("")}</div>` : `<div class="empty">No events yet.</div>`}</div>
+    </section></div>`;
+}
+
+function viewMilitary() {
+  const s = S.state; if (!s) return `<div class="empty">Waiting for the game…</div>`;
+  const byId = new Map(s.players.map((p) => [p.id, p]));
+  const threats = S.threats.filter((t) => t.threat >= 3).map((t) => {
+    const risk = t.ratio >= 2 && t.threat >= 8 ? ["bad", "Danger"] : t.ratio >= 1 && t.threat >= 5 ? ["warn", "Tense"] : ["ok", t.threat < 5 ? "Minor" : "Holding"];
+    return [esc(t.name), t.owners.map((o) => esc(byId.get(o)?.nation || o)).join(", "), n1(t.threat), n1(t.defence), `<span class="tag ${risk[0]}">${risk[1]}</span>`];
+  });
+  const prov = new Map(s.provinces.map((p) => [p.id, p.name]));
+  const armies = [...s.armies].sort((a, b) => b.str - a.str).map((a) => [esc(a.name || a.id), esc(prov.get(a.loc) || "-"), String(a.units), n1(a.str), n1(a.def), a.fight ? `<span class="tag bad">Fighting</span>` : a.moving ? `<span class="tag blue">Moving</span>` : `<span class="tag">Idle</span>`, esc(a.kinds.join(", "))]);
+  const weakAll = S.intel.weakest.filter((w) => w.weakness > 0.5);
+  const weak = [...S.intel.neighbours.filter((w) => w.weakness > 0), ...weakAll.filter((w) => !w.neighbour)].slice(0, 9).map((w) => [esc(w.nation), w.human ? "Player" : "AI", w.neighbour ? `<span class="tag ok">Can attack by land</span>` : `<span class="tag">Not reachable by land</span>`, `<span class="num">${w.weakness}</span>`, esc(w.why.slice(0, 2).join(" · "))]);
+  const enemies = S.enemies.map((e) => [esc(e.nation || e.id), n1(e.stack), String(e.lossesTo)]);
+  const playbook = S.enemies.filter((e) => e.lossesTo > 0).map((e) => `<div><span class="main"><b>${esc(e.nation || e.id)}</b> has taken ${e.lossesTo} of my provinces. Biggest stack I've seen from them: ${n0(e.stack)}. The bot now assumes their provinces are held by about ${n0(e.assumed)} strength and only attacks them with roughly ${n0(e.need)} or more, all in one place.</span></div>`).join("");
+  const lessons = S.lessons.filter((l) => !/^Seeded/.test(l.text)).slice().reverse();
+  const lab = S.lab;
+  return `<div class="stack"><section class="cols">
+    <div class="card"><h2>Cities under threat <small>enemy strength near them vs. what I have there</small></h2>${table(["City", "Enemy", "Their strength", "My defence", ""], threats, "No enemy force near any of my cities.")}</div>
+    <div class="card"><h2>Who looks beatable <small>from the newspaper and what the bot has seen</small></h2>${table(["Nation", "Type", "Reach", "Score", "Why"], weak, "No clearly weak players found.")}<p class="sub" style="margin-top:8px">Higher score = easier target. Neighbours come first because those are the only ones the bot can reach today; the rest is for planning.</p></div>
+  </section>
+  <section class="card"><h2>My armies <small>${s.armies.length} armies, ${s.armies.reduce((a, x) => a + x.units, 0)} units</small></h2>${table(["Army", "Where", "Units", "Attack", "Defence", "State", "Made of"], armies, "No armies.")}</section>
+  <section class="cols">
+    <div class="card"><h2>Enemy stacks it remembers</h2>${table(["Nation", "Biggest stack seen", "Times they took a province"], enemies, "Nothing remembered yet.")}</div>
+    <div class="card"><h2>What it learned from losses</h2>${playbook ? `<div class="list" style="margin-bottom:10px">${playbook}</div>` : ""}${lessons.length ? `<div class="list">${lessons.map((l) => `<div><span class="t">${ago(l.t)}</span><span class="main">${esc(l.text)}</span></div>`).join("")}</div>` : `<div class="empty">No specific lessons yet. One is written each time it loses a province, and repeats are skipped.</div>`}</div>
+  </section>
+  <section class="card"><h2>Air and naval learning</h2>${lab ? `<p class="sub">The bot tracks how much each kind of unit earns (kills against losses and money tied up) and adjusts how many it builds. Air share now ${(lab.plan.airShare * 100).toFixed(0)}%, naval ${(lab.plan.seaShare * 100).toFixed(0)}%. Air multiplier ${lab.plan.mAir.toFixed(2)}, naval ${lab.plan.mSea.toFixed(2)} (1.00 means no evidence yet).</p>` : `<div class="empty">Not enough data yet.</div>`}</section></div>`;
+}
+
+function viewEconomy() {
+  const s = S.state; if (!s) return `<div class="empty">Waiting for the game…</div>`;
+  const order = ["20", "1", "2", "3", "4", "5", "6"];
+  const keep = S.settings.market?.keep || {};
+  const needed = new Set((S.waiting || []).slice(0, 2).flatMap((w) => w.lacks.map((l) => l.name)));
+  const tiles = order.filter((k) => s.resources[k]).map((k) => {
+    const r = s.resources[k]; const low = k !== "20" && keep[k] && r.amount < keep[k] * 0.5;
+    return `<div class="tile"><div class="n"><span>${esc(r.name)}</span>${needed.has(r.name) ? `<span class="tag warn">needed</span>` : low ? `<span class="tag warn">low</span>` : ""}</div><div class="v num">${n0(r.amount)}</div><div class="r ${r.perHour >= 0 ? "up" : "down"} num">${r.perHour >= 0 ? "+" : ""}${n0(r.perHour)} per hour</div></div>`;
+  }).join("");
+  const blockers = (S.waiting || []).map((w) => `<div class="item"><span class="main"><b>${esc(w.label)}</b><div class="why">needs ${w.lacks.map((l) => `${n0(l.amount)} more ${esc(l.name)}`).join(", ")}</div></span></div>`).join("");
+  const orders = (S.market?.mine || []).map((o) => [o.buy ? "Buy" : "Sell", esc(s.resources[o.res]?.name || o.res), n0(o.amount), String(o.limit)]);
+  const prices = Object.entries(S.market?.prices || {}).map(([k, p]) => [esc(s.resources[k]?.name || k), String(p.price), `${p.min} – ${p.max}`]);
+  const research = s.research.current.map((c) => `<span class="tag blue">${esc(c.name)}</span>`).join(" ") || `<span class="empty">Nothing researching</span>`;
+  const provs = [...s.provinces].sort((a, b) => b.vp - a.vp || a.morale - b.morale).slice(0, 14).map((p) => [esc(p.name) + (p.city ? " <span class='tag'>city</span>" : ""), n1(p.vp), `<div class="meter ${p.morale < 40 ? "bad" : p.morale > 65 ? "ok" : ""}"><i style="width:${Math.max(3, Math.min(100, p.morale))}%"></i></div>`, p.constructing ? "Building" : p.freeSlot ? "<span class='tag ok'>Free slot</span>" : "-", p.producing ? "Training" : p.canMob ? "Can train" : "-"]);
+  return `<div class="stack">
+    <section class="card"><h2>Stockpile</h2><div class="tiles">${tiles}</div>${blockers ? `<h3 style="margin:14px 0 4px;font-size:14px">Waiting to afford, in priority order</h3><div class="list">${blockers}</div><p class="sub" style="margin-top:6px">The bot buys missing materials on the market when money allows and sells surplus when money is short.</p>` : `<p class="sub" style="margin-top:12px">Nothing is waiting on resources right now.</p>`}</section>
+    <section class="cols">
+      <div class="card"><h2>Research in progress</h2><p>${research}</p><p class="sub" style="margin-top:8px">${s.research.freeSlots} free research slot${s.research.freeSlots === 1 ? "" : "s"}. Low-value research waits until money is comfortable.</p></div>
+      <div class="card"><h2>My market orders</h2>${table(["Side", "Resource", "Amount", "Price"], orders, "No open orders.")}</div>
+      <div class="card"><h2>Market prices</h2>${table(["Resource", "Now", "Range"], prices, "No price data.")}</div>
+    </section>
+    <section class="card"><h2>Most valuable provinces <small>top 14 of ${s.provinces.length}</small></h2>${table(["Province", "VP", "Morale", "Construction", "Training"], provs, "")}<p class="sub" style="margin-top:8px">Low morale (red) means a province can revolt or be lost.</p></section></div>`;
+}
+
+function viewDiplomacy() {
+  const s = S.state; if (!s) return `<div class="empty">Waiting for the game…</div>`;
+  const co = S.coalitions; const needs = S.needsHuman;
+  const coRows = (co?.list || []).sort((a, b) => b.score - a.score).map((c) => [esc(c.name) + (c.pending ? ` <span class="tag blue">I applied</span>` : "") + (co.mine === c.id ? ` <span class="tag ok">My coalition</span>` : ""), String(c.members), n0(c.score), n0(c.req), esc(s.players.find((p) => p.id === c.leader)?.nation || c.leader)]);
+  const threads = S.conversations.map((t) => `<div class="thread ${t.waiting ? "wait" : ""}"><h3><span>${esc(t.who)}</span>${t.waiting ? `<span class="tag warn">their message is unanswered</span>` : ""}</h3>${t.last.map((m) => `<div class="bubble ${m.mine ? "me" : ""}">${esc(m.body)}</div>`).join("")}<div style="display:flex;gap:8px;margin-top:8px"><input type="text" placeholder="Reply to ${esc(t.who)}…" data-reply-box="${t.id}" maxlength="400"><button class="btn small" data-reply="${t.id}">Send</button></div></div>`).join("");
+  const q = playerFilter.toLowerCase();
+  const players = s.players.filter((p) => p.id !== s.me.id && p.nation && (!q || (p.nation + " " + p.name).toLowerCase().includes(q))).sort((a, b) => b.vps - a.vps).slice(0, 40)
+    .map((p) => [esc(p.nation), esc(p.name), p.human ? "Player" : "AI", n0(p.vps), p.team ? esc((co?.list.find((c) => c.id === p.team)?.name) || "#" + p.team) : "-", relTag(p.rel)]);
+  return `<div class="stack"><section class="cols">
+    <div class="card"><h2>Coalition</h2><p>${co?.mine ? `I'm in <b>${esc(co.list.find((c) => c.id === co.mine)?.name || co.mine)}</b>.` : (co?.list.find((c) => c.pending) ? `I applied to <b>${esc(co.list.find((c) => c.pending).name)}</b> and I'm waiting for an answer.` : "I'm not in a coalition and have no open application.")}</p><p class="sub" style="margin:6px 0 10px">A coalition shares one victory target (about ${n0(co?.list[0]?.req || 0)} VP for five players) and the members don't attack each other.</p>${table(["Coalition", "Members", "VP", "Needs", "Leader"], coRows, "No coalition data.")}</div>
+    <div class="card"><h2>Messages ${needs.length ? `<span class="badge">${needs.length}</span>` : ""}</h2>
+      ${needs.length ? `<div class="attn" style="margin-bottom:12px">${needs.map((n) => `<div class="item warn"><span class="ico">!</span><span style="flex:1"><b>${esc(n.who)}</b>: "${esc(n.text)}"<div class="sub">The bot doesn't guess answers to questions or accusations. Reply in the game if it matters.</div></span><button class="btn small" data-dismiss="${n.t}">Done</button></div>`).join("")}</div>` : ""}
+      ${threads || `<div class="empty">No conversations yet.</div>`}</div>
+  </section>
+  <section class="card"><h2>Other nations <small>top 40 by VP</small></h2><div style="margin-bottom:8px"><input type="text" id="pf" placeholder="Search by nation or player" value="${esc(playerFilter)}" style="max-width:300px"></div>${table(["Nation", "Player", "Type", "VP", "Coalition", "My stance"], players, "No match.")}<p class="sub" style="margin-top:8px">"War (default)" means no treaty exists, which in this game counts as war.</p></section></div>`;
+}
+
+function viewActivity() {
+  const rows = S.logs.filter((l) => logFilter === "all" ? true : logFilter === "important" ? kindOf(l)[2] === "imp" : logFilter === "actions" ? kindOf(l)[2] === "act" : (l.level === "warn" || l.level === "error"))
+    .slice(-150).reverse();
+  const seg = (k, label) => `<button data-lf="${k}" aria-pressed="${logFilter === k}">${label}</button>`;
+  return `<div class="stack"><section class="card"><h2>Activity</h2><div class="seg" style="margin-bottom:10px">${seg("important", "Important")}${seg("actions", "Actions")}${seg("problems", "Problems")}${seg("all", "Everything")}</div>
+    ${rows.length ? `<div class="list" style="max-height:640px;overflow:auto">${rows.map((l) => { const k = kindOf(l); const lvl = l.level === "error" ? "bad" : l.level === "warn" ? "warn" : k[1]; return `<div><span class="t">${clock(l.t)}</span><span class="main"><span class="tag ${lvl}">${esc(k[0])}</span> ${esc(l.text)}${l.reason ? `<div class="why">${esc(l.reason)}</div>` : ""}</span></div>`; }).join("")}</div>` : `<div class="empty">Nothing in this view.</div>`}</section></div>`;
+}
+
+const PRESETS = {
+  safe: { name: "Safe", text: "Build economy first, attack only when clearly stronger, never go to war with players.", patch: { mode: "economy", autoMode: false, warPolicy: "ai_only" } },
+  auto: { name: "Smart (recommended)", text: "The bot switches between building, balanced and attacking by itself. Fights players only if they're weak or attack first.", patch: { autoMode: true, warPolicy: "non_allies" } },
+  push: { name: "Aggressive", text: "Always pushes for territory with a smaller strength margin. Higher risk, faster growth.", patch: { mode: "aggressive", autoMode: false, warPolicy: "non_allies" } },
+};
+const SWITCHES = [
+  ["doBuild", "Build and upgrade provinces", "Arms industries, bases, population."], ["doResearch", "Research", "Spends money and rare materials on tech."], ["doMobilize", "Train new units", ""],
+  ["doMilitary", "Fight (attack and defend)", "Turn off to make the bot purely defensive and peaceful."], ["doMarket", "Trade on the market", "Buy what's missing, sell surplus."],
+  ["doDiplomacy", "Diplomacy (peace offers, relations)", ""], ["doMessaging", "Answer messages from players", "Only clear cases. Questions are left for you."], ["doCoalition", "Apply to coalitions", "One application at a time."],
+];
+function viewSettings() {
+  const st = S.settings;
+  const active = (p) => Object.entries(p.patch).every(([k, v]) => st[k] === v);
+  return `<div class="stack">
+    <section class="card"><h2>Play style</h2><div class="presets">${Object.entries(PRESETS).map(([k, p]) => `<button class="preset" data-preset="${k}" aria-pressed="${active(p)}"><b>${p.name}</b><span class="sub">${p.text}</span></button>`).join("")}</div></section>
+    <section class="card"><h2>What the bot is allowed to do</h2>${SWITCHES.map(([k, t, d]) => `<div class="row"><div class="what"><b>${t}</b>${d ? `<div>${d}</div>` : ""}</div><label class="switch"><input type="checkbox" data-sw="${k}" ${st[k] ? "checked" : ""} aria-label="${t}"><span></span></label></div>`).join("")}
+      <div class="row"><div class="what"><b>Preview mode</b><div>The bot plans and logs but sends nothing to the game. Good for testing.</div></div><label class="switch"><input type="checkbox" data-sw="dryRun" ${st.dryRun ? "checked" : ""} aria-label="Preview mode"><span></span></label></div>
+      <div class="row"><div class="what"><b>Allow nuclear and chemical weapons</b><div>Off is strongly recommended: it wrecks morale and relations.</div></div><label class="switch"><input type="checkbox" data-sw="allowWmd" ${st.allowWmd ? "checked" : ""} aria-label="Allow weapons of mass destruction"><span></span></label></div></section>
+    <section class="card"><h2>Who it may attack</h2><div class="seg" id="wp">${[["none", "Nobody"], ["ai_only", "Computer nations only"], ["non_allies", "Anyone who isn't an ally"]].map(([k, t]) => `<button data-wp="${k}" aria-pressed="${st.warPolicy === k}">${t}</button>`).join("")}</div>
+      <p class="sub" style="margin-top:8px">Coalition mates and allies are always protected.</p></section>
+    <section class="card"><details><summary>Advanced numbers</summary>
+      <div class="grid2">
+        <label class="f">Mode when auto is off<select data-num="mode">${["economy", "balanced", "aggressive"].map((m) => `<option ${st.mode === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
+        <label class="f">Messages per hour (max)<input type="number" min="0" max="30" data-num="messageLimitPerHour" value="${st.messageLimitPerHour}"></label>
+        <label class="f">Seconds between decisions<input type="number" min="5" max="300" data-num="tickSeconds" value="${st.tickSeconds}"></label>
+        <label class="f">Strength margin to attack (balanced)<input type="number" step="0.05" min="1" max="5" data-nested="attackRatio.balanced" value="${(st.attackRatio.balanced).toFixed(2)}"></label>
+        <label class="f">Max units (balanced)<input type="number" min="4" max="200" data-nested="maxUnits.balanced" value="${st.maxUnits.balanced}"></label>
+        <label class="f">Money to keep in reserve<input type="number" min="0" step="100" data-nested="reserve.20" value="${st.reserve["20"] ?? 0}"></label>
+      </div><p class="sub" style="margin-top:10px">The bot also tunes the margin and unit cap by itself from results.</p></details></section></div>`;
+}
+
+/* ---------- wiring ---------- */
+const VIEWS = { home: viewHome, military: viewMilitary, economy: viewEconomy, diplomacy: viewDiplomacy, activity: viewActivity, settings: viewSettings };
+function renderGameSelect() {
+  const sel = $("game"); const games = S.games || [];
+  const sig = JSON.stringify(games.map((g) => [g.id, g.nation, g.day, g.vp])) + (S.gameId || "");
+  if (sel.dataset.sig === sig) return;
+  sel.dataset.sig = sig;
+  sel.innerHTML = games.length ? games.map((g) => `<option value="${esc(g.id)}" ${g.id === S.gameId ? "selected" : ""}>${esc(g.nation || "game " + g.id)} · day ${g.day} · ${n0(g.vp)} VP</option>`).join("") : `<option>No game open</option>`;
+  sel.style.display = games.length > 1 ? "" : "none"; // one game: no selector needed
+}
+function renderHeader() {
+  if (S.noGame) { $("dot").className = "dot"; $("conn").textContent = "Waiting for a game"; $("who").textContent = ""; $("vptext").textContent = ""; $("vpbar").style.width = "0%"; $("pause").style.display = "none"; $("tabs").innerHTML = ""; renderGameSelect(); return; }
+  $("pause").style.display = "";
+  renderGameSelect();
+  const s = S.state, st = S.settings;
+  $("dot").className = "dot" + (S.connected ? " on" : "");
+  $("conn").textContent = !S.connected ? "Not connected" : !st.enabled ? "Paused" : st.dryRun ? "Preview only" : "Running";
+  $("who").textContent = s ? `${s.me.nation} · day ${s.day}` : "";
+  if (s) { const pct = Math.min(100, (s.me.vps / (s.vpLimit || 1)) * 100); $("vptext").innerHTML = `<b class="num">${n0(s.me.vps)}</b> / ${n0(s.vpLimit)}`; $("vpbar").style.width = pct + "%"; }
+  const p = $("pause"); p.textContent = st.enabled ? "Pause bot" : "Resume bot"; p.className = "btn " + (st.enabled ? "stop" : "primary");
+  const wait = S.needsHuman.length;
+  $("tabs").innerHTML = TABS.map(([k, t]) => `<button class="tab" role="tab" aria-selected="${tab === k}" data-tab="${k}">${t}${k === "diplomacy" && wait ? `<span class="badge">${wait}</span>` : ""}</button>`).join("");
+}
+function render() {
+  if (!S) return;
+  renderHeader();
+  if (S.noGame) {
+    $("main").dataset.tab = "none";
+    $("main").innerHTML = `<div class="card hero warn"><h1>No game is open yet</h1><ul><li>Open a game in the bot's browser window (the one with the game site) and a player starts for it automatically within about 15 seconds.</li><li>You can play several games at once: each open game tab gets its own player with its own settings and memory.</li></ul><p style="margin-top:12px"><button class="btn primary" id="addgame2">Open a game tab</button></p></div>`;
+    return;
+  }
+  if (tab === "home" && hovering) return; // do not rebuild the charts under the pointer
+  if (tab === "diplomacy") { // never wipe a half-typed reply when new data arrives
+    const typing = [...document.querySelectorAll("[data-reply-box]")].some((b) => b.value || b === document.activeElement);
+    if (typing) return;
+  }
+  const keepFocus = document.activeElement && document.activeElement.id === "pf";
+  const sig = tab === "settings" ? JSON.stringify(S.settings) : null;
+  if (tab === "settings" && sig === lastSettingsSig && $("main").dataset.tab === "settings" && document.activeElement && $("main").contains(document.activeElement)) return; // don't clobber a field being edited
+  lastSettingsSig = sig;
+  $("main").dataset.tab = tab;
+  $("main").innerHTML = VIEWS[tab]();
+  if (keepFocus) { const el = $("pf"); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
+}
+function switchGame(id) {
+  currentGame = id; store.set("game", id);
+  if (connect.es) connect.es.close();
+  S = null; connect();
+}
+document.addEventListener("change", (e) => { if (e.target.id === "game") switchGame(e.target.value); });
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#addgame,#addgame2")) { post("/api/addgame", {}).then(() => toast("Opened a new tab on the game site: pick a game there")); return; }
+  const t = e.target.closest("[data-tab],[data-lf],[data-range],[data-preset],[data-wp],[data-dismiss],[data-reply],#pause,#theme"); if (!t) return;
+  if (t.dataset.tab) { tab = t.dataset.tab; store.set("tab", tab); render(); }
+  else if (t.dataset.lf) { logFilter = t.dataset.lf; render(); }
+  else if (t.dataset.range) { chartRange = t.dataset.range; store.set("range", chartRange); render(); }
+  else if (t.dataset.preset) { save(PRESETS[t.dataset.preset].patch, "Play style updated"); }
+  else if (t.dataset.wp) { save({ warPolicy: t.dataset.wp }, "Saved"); }
+  else if (t.dataset.reply) { sendReply(Number(t.dataset.reply)); }
+  else if (t.dataset.dismiss) { post("/api/dismiss", { t: Number(t.dataset.dismiss) }).then(() => toast("Dismissed")); }
+  else if (t.id === "pause") { save({ enabled: !S.settings.enabled }, S.settings.enabled ? "Bot paused" : "Bot resumed"); }
+  else if (t.id === "theme") { const cur = document.documentElement.dataset.theme === "light" ? "dark" : "light"; document.documentElement.dataset.theme = cur; store.set("theme", cur); }
+});
+function sendReply(id) {
+  const box = document.querySelector(`[data-reply-box="${id}"]`); const text = (box?.value || "").trim();
+  if (!text) { toast("Type a message first"); return; }
+  post("/api/command", { kind: "message", args: [id, text], label: "Message sent from the dashboard" }).then(() => { box.value = ""; toast("Sent"); });
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset && e.target.dataset.replyBox) sendReply(Number(e.target.dataset.replyBox)); });
+document.addEventListener("change", (e) => {
+  const el = e.target;
+  if (el.dataset.sw) save({ [el.dataset.sw]: el.checked });
+  else if (el.dataset.num) save({ [el.dataset.num]: el.type === "number" ? Number(el.value) : el.value });
+  else if (el.dataset.nested) { const [a, b] = el.dataset.nested.split("."); save({ [a]: { [b]: Number(el.value) } }); }
+});
+document.addEventListener("input", (e) => { if (e.target.id === "pf") { playerFilter = e.target.value; render(); } });
+
+const savedGame = store.get("game"); if (savedGame) currentGame = savedGame;
+const savedTheme = store.get("theme"); if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+const savedRange = store.get("range"); if (["6h", "24h", "all"].includes(savedRange)) chartRange = savedRange;
+const savedTab = store.get("tab"); if (savedTab && VIEWS[savedTab]) tab = savedTab;
+function connect() {
+  const es = new EventSource("/api/events" + gq());
+  connect.es = es;
+  es.onmessage = (m) => {
+    S = JSON.parse(m.data);
+    if (S.gameId && S.gameId !== currentGame) { currentGame = S.gameId; store.set("game", currentGame); } // the saved game was closed: follow the one we were given
+    render();
+  };
+  es.onerror = () => { $("conn").textContent = "Dashboard disconnected, retrying…"; $("dot").className = "dot"; };
+}
+connect();
+</script>
+</body>
+</html>

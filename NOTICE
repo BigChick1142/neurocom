@@ -1,0 +1,10 @@
+Required Notice: Copyright (c) 2026 BigChick1142 (https://github.com/BigChick1142/neurocom)
+
+Neurocom is licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE).
+Unofficial: not affiliated with or endorsed by the publisher of the game it works with (see DISCLAIMER.md).
+
+Third-party software used (installed through npm, not included in this repository):
+- Playwright (Apache-2.0)
+- discord.js (Apache-2.0)
+- tsx (MIT)
+- TypeScript (Apache-2.0)

@@ -1,0 +1,27 @@
+{
+  "name": "neurocom",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "tsx tools/sim.ts",
+    "recon": "tsx src/recon.ts",
+    "browser": "tsx src/launch.ts",
+    "ev": "tsx src/ev.ts",
+    "snapshot": "tsx src/snapshot.ts",
+    "start": "tsx src/main.ts",
+    "report": "tsx tools/report.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@types/node": "^26.6.6",
+    "discord.js": "^14.28.1",
+    "playwright": "^1.65.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

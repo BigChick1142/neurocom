@@ -1,0 +1,24 @@
+// Dry run of the mobilization planner against the live game (read-only): npx tsx tools/drymob.ts
+import { connect } from "../src/browser.js";
+import { inject, call } from "../src/inject.js";
+import { loadSettings } from "../src/bot/settings.js";
+import { defaultGameDir } from "../src/bot/games.js";
+import { planMobilize, capitalInDanger, assessThreats, type ProvOptions, type Shortfall } from "../src/bot/brain.js";
+import type { GameState } from "../src/bot/types.js";
+const { game } = await connect(); await inject(game);
+const s = await call<GameState>(game, "state");
+const st = loadSettings(defaultGameDir());
+const ids = s.provinces.filter((p) => p.canMob).map((p) => p.id);
+const rows = await call<({ id: number } & ProvOptions)[]>(game, "options", ids.slice(0, 24), false, true);
+const options = new Map(rows.map((r) => [r.id, r]));
+const budget = Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));
+const short: Shortfall = {};
+const em = capitalInDanger(s);
+console.log("canMob provinces:", ids.length, s.provinces.filter((p) => p.canMob).map((p) => `${p.name}(prod ${p.producing}/${p.prodSlots})`).join(", "));
+console.log("capitalInDanger:", em, "threats:", assessThreats(s).slice(0, 3).map((t) => `${t.name} ${t.threat.toFixed(1)} vs ${t.defence.toFixed(1)}`));
+console.log("units:", s.armies.reduce((a, x) => a + x.units.length, 0), "cap(balanced):", st.maxUnits.balanced);
+const out = planMobilize(s, { ...st, mode: "balanced" }, options, budget, {}, short, undefined, em);
+console.log("plan:", out.map((d) => d.label + " | " + d.reason));
+console.log("shortfall:", short);
+for (const [id, o] of options) console.log(id, o.productions.map((p) => `${p.name}:${JSON.stringify(p.costs)}`).join(" ; ").slice(0, 300));
+process.exit(0);

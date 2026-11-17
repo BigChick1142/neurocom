@@ -6,7 +6,7 @@ import type { Session } from "../browser.js";
 import { call, inject } from "../inject.js";
 import { draftReply } from "./llm.js";
 import { evaluateAttacks, tuneFromAttacks, tuneUnitCap } from "./tuner.js";
-import { waitingOf, type Waiting, findTargets, assessThreats, chooseMode, planDefense, budgetOf, planMarket, type MarketInfo, type Shortfall, type CoalitionInfo, planCoalition, planBuilds, planDiplomacy, planMessages, planMilitary, planTruceHalts, planRally, planAirSea, planMobilize, capitalInDanger, planResearch, type InboxMsg, type ProvOptions, type ResearchOpt } from "./brain.js";
+import { planCampaign, waitingOf, type Waiting, findTargets, assessThreats, chooseMode, planDefense, budgetOf, planMarket, type MarketInfo, type Shortfall, type CoalitionInfo, planCoalition, planBuilds, planDiplomacy, planMessages, planMilitary, planTruceHalts, planRally, planAirSea, planMobilize, capitalInDanger, planResearch, type InboxMsg, type ProvOptions, type ResearchOpt } from "./brain.js";
 import { loadSettings, patchSettings, saveSettings } from "./settings.js";
 import { freshLab, type Decision, type GameState, type Memory, type Settings } from "./types.js";
 import { dumpRules } from "../dumpmod.js";
@@ -27,7 +27,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function loadMemory(dir: string): Memory {
   const MEM_FILE = `${dir}/memory.json`;
-  const fresh: Memory = { lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() };
+  const fresh: Memory = { campaign: { key: "", startedAt: 0, firstDone: false, peaceAt: 0 }, coalitionInvite: {}, lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, moveTries: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() };
   try { if (existsSync(MEM_FILE)) return { ...fresh, ...JSON.parse(readFileSync(MEM_FILE, "utf8")) }; } catch { /* start fresh */ }
   return fresh;
 }
@@ -64,6 +64,7 @@ export class Bot extends EventEmitter {
   intel: Record<number, PlayerIntel> = {};
   private intelAt = 0;
   lastOpportunity = false;
+  modeSince = 0;
   lastEmergency = false;
   lastInbox: InboxMsg[] = [];
   private prevState: GameState | null = null;
@@ -317,14 +318,18 @@ export class Bot extends EventEmitter {
   private async plan(game: Frame, s: GameState): Promise<Decision[]> {
     let st = this.settings;
     if (st.autoMode) {
-      const m = chooseMode(s, st, this.mem);
-      if (m !== this.effectiveMode) this.log("info", "mode", "Auto mode: " + this.effectiveMode + " -> " + m, "bot");
+      let m = chooseMode(s, st, this.mem);
+      // Threat and target sightings flicker as stacks move in and out of view: hold a mode for 15 minutes unless the capital is in danger.
+      if (m !== this.effectiveMode && this.modeSince && Date.now() - this.modeSince < 15 * 60_000 && !capitalInDanger(s)) m = this.effectiveMode;
+      if (m !== this.effectiveMode) { this.log("info", "mode", "Auto mode: " + this.effectiveMode + " -> " + m, "bot"); this.modeSince = Date.now(); }
       this.effectiveMode = m;
       st = { ...st, mode: m };
     } else {
       this.effectiveMode = st.mode;
     }
     for (const [id, t] of Object.entries(this.mem.capturedAt)) if (Date.now() - t < 4 * 3600_000) this.mem.blocked["prov:" + id] = t + 4 * 3600_000;
+    // Clear war-confirmation pop-ups left by attack orders the game wanted a human to confirm (only while such orders are pending).
+    if (Object.values(this.mem.moveTries).some((m) => Date.now() - m.t < 5 * 60_000)) await call<number>(game, "dismissWarDialogs").catch(() => 0);
     const budget = budgetOf(s);
     const short: Shortfall = {};
     // newspaper + player profiles every ~8 min (cheap read-only); observed idleness is refreshed every tick
@@ -399,7 +404,8 @@ export class Bot extends EventEmitter {
       plan.push(...planTruceHalts(s, this.mem));
       const attacks = planMilitary(s, st, this.mem, busy, this.intel);
       plan.push(...attacks);
-      const used = new Set<string | number>([...busy, ...attacks.filter((d) => d.kind === "move" && d.args.length).map((d) => d.args[0] as string | number)]);
+      const verifying = Object.entries(this.mem.moveTries).filter(([, m]) => Date.now() - m.t < 20 * 60_000).map(([id]) => id);
+      const used = new Set<string | number>([...busy, ...verifying, ...verifying.map(Number), ...attacks.filter((d) => d.kind === "move" && d.args.length).map((d) => d.args[0] as string | number)]);
       if (!this.lastEmergency) plan.push(...planRally(s, st, this.mem, this.intel, used)); // in an emergency the defence logic already concentrates
       plan.push(...planAirSea(s, st, this.mem));
     }
@@ -407,6 +413,7 @@ export class Bot extends EventEmitter {
       const co = await call<CoalitionInfo>(game, "coalitions").catch(() => null);
       if (co) { this.lastCoalitions = co; plan.push(...planCoalition(s, st, co, this.mem)); }
     }
+    plan.push(...planCampaign(s, st, this.mem));
     if (st.doDiplomacy) plan.push(...planDiplomacy(s, st, this.mem));
     if (st.doMessaging) {
       const inbox = await call<InboxMsg[]>(game, "inbox").catch(() => []);
@@ -444,6 +451,7 @@ export class Bot extends EventEmitter {
       const fn = ACTION_FN[d.kind];
       if (!fn) { this.log("error", d.kind, "Blocked: not a whitelisted action", source); continue; }
       if (this.settings.dryRun && source === "bot") { this.log("info", "dry-run", d.label, source, d.reason); continue; }
+      const refusedBefore = this.counters.serverRefused;
       try {
         const res = await call<{ ok: boolean; why?: string }>(game, fn, ...d.args);
         n++; this.counters.actions++;
@@ -461,12 +469,28 @@ export class Bot extends EventEmitter {
         this.log("error", d.kind, `${d.label} -> ${(e as Error).message.split("\n")[0]}`, source);
       }
       await sleep(700);
+      // The server can acknowledge an order and still refuse it a moment later (the refusal arrives separately): do not re-send the same market order every few minutes.
+      if (d.kind === "coalition_apply" && this.counters.serverRefused > refusedBefore) { // the application did not register (e.g. my withdrawal was still being processed): try again later, not in 72h
+        delete this.mem.coalitionTried[String(d.args[0])];
+        delete this.mem.coalitionInvite[String(d.args[0])]; // an invitation I cannot act on must not keep pulling me away from a working application
+        const nKey = "coalitionN:" + d.args[0], n = (this.mem.blocked[nKey] ?? 0) + 1; // repeated refusals back off: 30 min, 1 h, 2 h ... 12 h
+        this.mem.blocked[nKey] = n;
+        const wait = Math.min(12 * 60, 30 * 2 ** (n - 1));
+        this.mem.blocked["coalition:" + d.args[0]] = Date.now() + wait * 60_000;
+        this.log("info", "coalition", `Coalition application refused by the server (${n}x); will retry in ${wait} min`, source);
+      }
+      if (d.kind === "market" && this.counters.serverRefused > refusedBefore) {
+        this.mem.blocked["market:" + (d.args[0] ? "buy" : "sell") + ":" + d.args[3]] = Date.now() + 2 * 3600_000;
+        this.log("info", "market", `Backing off ${d.args[0] ? "buying" : "selling"} resource ${d.args[3]} for 2h: the server refused the order`, source);
+      }
     }
   }
 
   private afterSuccess(d: Decision) {
     const now = Date.now();
     if (d.kind === "move" && d.meta?.target) {
+      const k = String(d.args[0]), prev = this.mem.moveTries[k];
+      this.mem.moveTries[k] = prev && prev.target === d.meta.target && now - prev.t < 20 * 60_000 ? { ...prev, t: now, n: prev.n + 1 } : { target: d.meta.target, t: now, n: 1, declared: false };
       const army = this.state?.armies.find((a) => String(a.id) === String(d.args[0]));
       let rec = this.mem.attacks.find((x) => x.target === d.meta!.target && now - x.t < 30 * 60_000);
       if (!rec) { rec = { t: now, target: d.meta.target, mode: this.effectiveMode, ids: [], units: 0 }; this.mem.attacks.push(rec); }

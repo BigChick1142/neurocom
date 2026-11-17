@@ -138,6 +138,7 @@ export function planBuilds(s: GameState, st: Settings, options: Map<number, Prov
     const near = fd.get(p.id) ?? 9;
     for (const u of opt.upgrades) {
       if (SKIP_BUILD.test(u.name)) continue;
+      if (Object.keys(u.costs).length === 0) continue; // an upgrade with no cost data cannot be queued (accepted by the server, never started)
       if (p.have?.includes(u.id)) continue; // already built: ordering it again is a silent no-op
       if ((blocked["build:" + p.id + ":" + u.id] ?? 0) > Date.now()) continue;
       const key = Object.keys(st.weights).find((k) => u.name.startsWith(k));
@@ -276,8 +277,11 @@ export function eligibleTarget(s: GameState, st: Settings, owner: number): boole
 export function findTargets(s: GameState, st: Settings, mem: Memory, intel: Record<number, PlayerIntel> = {}): Target[] {
   const out: Target[] = [];
   const now = Date.now();
+  const camp = campaignStep(s, st, mem);
   for (const f of s.frontier) {
     if (!eligibleTarget(s, st, f.owner)) continue;
+    if (camp.only && f.name.trim().toLowerCase() !== camp.only) continue; // campaign step 1: only the named province
+    if (camp.spare.has(f.owner)) continue; // campaign step 2: players I am making peace with are left alone
     if ((mem.failedTargets[f.id] ?? 0) > now - 10 * 60_000) continue;
     if ((mem.truce[f.owner] ?? 0) > now) continue; // I asked this owner for peace while outgunned: do not provoke them meanwhile
     const visible = s.otherArmies.filter((a) => a.loc === f.id && a.owner === f.owner && !a.air).reduce((x, a) => x + a.def, 0);
@@ -287,7 +291,8 @@ export function findTargets(s: GameState, st: Settings, mem: Memory, intel: Reco
     // an owner who has not moved for many hours will not reinforce: trust what I can see rather than the cautious guess
     const idle = ii?.inactiveHours != null && ii.inactiveHours >= 12;
     const baseline = (f.city ? 7 : 3) * (idle ? 0.6 : 1);
-    out.push({ prov: f, ownerRel: p?.rel, estDef: Math.max(visible, baseline, learnedDefence(mem.enemy, f.owner)), value: (f.vp || 1) * (st.targetPlayers.includes(f.owner) ? 2 : 1) * (p && p.human ? 0.6 : 1) * weaknessMultiplier(ii) });
+    const campaignBoost = camp.focus.has(f.owner) ? (st.campaign.cities ? (f.city ? 6 : 0.4) : 3) : 1; // campaign step 3: their cities first
+    out.push({ prov: f, ownerRel: p?.rel, estDef: Math.max(visible, baseline, learnedDefence(mem.enemy, f.owner)), value: (f.vp || 1) * (st.targetPlayers.includes(f.owner) ? 2 : 1) * (p && p.human ? 0.6 : 1) * weaknessMultiplier(ii) * campaignBoost });
   }
   return out.sort((a, b) => b.value / (1 + b.estDef) - a.value / (1 + a.estDef));
 }
@@ -326,6 +331,12 @@ export function planMilitary(s: GameState, st: Settings, mem: Memory, exclude: S
   const targets = findTargets(s, st, mem, intel);
   if (!targets.length) return out;
 
+  // An order that "succeeds" can still do nothing (the game may be waiting for a war-declaration confirmation, as in games where
+  // nobody is at war by default). So: an army that is moving has taken its order; one that is not, after an order, has not.
+  const now0 = Date.now();
+  const declaredOwners = new Set<number>();
+  for (const a of s.armies) if (a.moving || a.fight) delete mem.moveTries[String(a.id)];
+
   let free = freeGroundArmies(s, mem, exclude);
   if (!free.length) return out;
 
@@ -350,9 +361,22 @@ export function planMilitary(s: GameState, st: Settings, mem: Memory, exclude: S
       break; // wait for the declaration to register before moving
     }
     if (!atWar && owner) continue;
+    let backedOff = false;
     for (const a of group) {
+      const key = "move:" + a.id + ":" + t.prov.id;
+      if ((mem.blocked[key] ?? 0) > now0) { backedOff = true; continue; }
+      const tr = mem.moveTries[String(a.id)];
+      if (tr && tr.target === t.prov.id && now0 - tr.t < 20 * 60_000) { // I already ordered this and the army did not start moving
+        if (tr.n >= 2) { mem.blocked[key] = now0 + 2 * 3600_000; delete mem.moveTries[String(a.id)]; backedOff = true; continue; }
+        if (!tr.declared) {
+          tr.declared = true;
+          if (owner && st.doDiplomacy && !declaredOwners.has(owner.id)) { declaredOwners.add(owner.id); out.push({ kind: "relation", args: [owner.id, -2], label: `Declare war on ${owner.nation} (${owner.name})`, reason: `my attack order on ${t.prov.name} did not take effect: the game probably wants a war declaration first`, cost: {} }); }
+          continue;
+        }
+      }
       out.push({ kind: "move", args: [a.id, t.prov.x, t.prov.y], label: `Attack ${t.prov.name} with ${a.name || a.id} (str ${a.str.toFixed(1)})`, reason: `force ${str.toFixed(1)} vs est. defence ${t.estDef.toFixed(1)}, VP ${t.prov.vp}` + (ii && ii.weakness > 0.8 ? `; weak owner: ${ii.why.slice(0, 2).join(", ")}` : ""), cost: {}, meta: { target: t.prov.id } });
     }
+    if (backedOff) out.push({ kind: "move", args: [], label: `Hold: orders against ${t.prov.name} are not taking effect`, reason: "declared war and retried; backing off for 2h on the armies that still do not move", cost: {} });
     free = free.filter((a) => !group.includes(a));
     if (!free.length) break;
   }
@@ -470,10 +494,49 @@ export interface InboxMsg { uid: number; from: number; to: number; body: string;
 
 const PEACE_RE = /peace|truce|cease|non.?aggress|nap\b|friend|stop attack|don'?t attack/i;
 const ALLY_RE = /ally|alliance|coalition|team up|join us|join my/i;
+const INVITE_RE = /(join|come (in|to)|enter|be part of)\b.{0,25}\b(coalition|alliance|team|us)\b|\b(my|our) (coalition|alliance)\b/i; // an invitation, even when it ends in a question mark
 const TRADE_RE = /trade|sell|buy|resources|supplies|exchange|swap/i;
 const QUESTION_RE = /\?|\b(why|how|what|who|when|where|are you|did you|do you|can you|will you)\b/i;
 const ACCUSE_RE = /declared (first|war)|u declared|you declared|started it|attacked (me )?first|your fault|stop attack|why did you|playing (2|two) sides/i;
 const HOSTILE_RE = /attack|destroy|kill|noob|crush|die\b|fuck|stupid/i;
+
+// ---------------------------------------------------------------- CAMPAIGN
+/** Where the owner-given plan stands: step 1 take a named province, step 2 make peace, step 3 press another player's cities. */
+export function campaignStep(s: GameState, st: Settings, mem: Memory): { stage: 0 | 1 | 2 | 3; only: string; spare: Set<number>; focus: Set<number> } {
+  const c = st.campaign;
+  const none = { stage: 0 as const, only: "", spare: new Set<number>(), focus: new Set<number>() };
+  if (!c || (!c.first && !c.peaceWith.length && !c.then.length)) return none;
+  const key = JSON.stringify(c);
+  if (mem.campaign.key !== key) mem.campaign = { key, startedAt: Date.now(), firstDone: false, peaceAt: 0 };
+  const cm = mem.campaign, now = Date.now();
+  const name = c.first.trim().toLowerCase();
+  if (name && !cm.firstDone && (s.provinces.some((p) => p.name.trim().toLowerCase() === name) || now - cm.startedAt > 24 * 3600_000)) cm.firstDone = true; // taken (or given up after a day)
+  if (name && !cm.firstDone) return { ...none, stage: 1, only: s.frontier.some((f) => f.name.trim().toLowerCase() === name) ? name : "", spare: new Set() };
+  if (c.peaceWith.length && !cm.peaceAt) return { ...none, stage: 2, spare: new Set(c.peaceWith) }; // peace offers go out this tick
+  return { stage: 3, only: "", spare: new Set(c.peaceWith), focus: new Set(c.then) };
+}
+
+/** Peace with the named players once the first goal is taken. Offers go out through the normal peace action; the owner is left alone meanwhile. */
+export function planCampaign(s: GameState, st: Settings, mem: Memory): Decision[] {
+  const camp = campaignStep(s, st, mem);
+  const out: Decision[] = [];
+  const now = Date.now();
+  if (camp.stage === 2) {
+    for (const pid of st.campaign.peaceWith) {
+      const p = s.players.find((x) => x.id === pid);
+      if (!p || (p.rel ?? -2) >= 1) continue;
+      out.push({ kind: "relation", args: [pid, 1], label: `Offer peace to ${p.nation} (${p.name})`, reason: `campaign: ${st.campaign.first || "first goal"} is taken, now peace with ${p.nation}`, cost: {} });
+      if (p.human && (mem.lastMessaged[pid] ?? 0) < now - 60 * 60_000) {
+        const text = compose((mem.sentTexts[String(pid)] ?? []).length >= 1 ? "negotiate_again" : "negotiate", pid, mem) ?? compose("negotiate_again", pid, mem);
+        if (text) { remember(mem, pid, text); out.push({ kind: "message", args: [pid, text], label: `Message ${p.nation} about peace`, reason: "campaign: peace after taking the province", cost: {} }); }
+      }
+      mem.lastPeaceOffer[pid] = now;
+      mem.truce[pid] = now + 24 * 3600_000; // do not attack them while the offer stands
+    }
+    mem.campaign.peaceAt = now;
+  }
+  return out;
+}
 
 export function planDiplomacy(s: GameState, st: Settings, mem: Memory): Decision[] {
   const out: Decision[] = [];
@@ -563,6 +626,14 @@ export function planMessages(s: GameState, st: Settings, mem: Memory, inbox: Inb
     let kind: MsgKind | null = null;
     let relation: number | null = null;
     if (INSULT_RE.test(body) && !QUESTION_RE.test(body)) continue; // do not feed it
+    if (p.team > 0 && INVITE_RE.test(body) && !ACCUSE_RE.test(body)) { // a member of a coalition asks me to join: the planner takes it up, and I answer yes
+      mem.coalitionInvite[String(p.team)] = now;
+      if (budget > 0 && now - (mem.lastReplyAt[String(p.id)] ?? 0) > 6 * 3600_000) {
+        const text = compose("accept_invite", p.id, mem);
+        if (text) { remember(mem, p.id, text); mem.lastReplyAt[String(p.id)] = now; out.push({ kind: "message", args: [p.id, text], label: `${label("Reply to")}: "${body.slice(0, 40)}${body.length > 40 ? "..." : ""}"`, reason: "coalition invitation: accepting", cost: {}, meta: { player: p.id, incoming: body } }); budget--; }
+      }
+      continue;
+    }
     if (ACCUSE_RE.test(body) || /(attack|destroy|kill)/i.test(body) && !PEACE_RE.test(body)) { if (!hasLLM) { flag("accusation or threat - not answered by a template"); continue; } }
     else if (PEACE_RE.test(body)) { kind = "reply_peace"; relation = 1; }
     else if (TRADE_RE.test(body) && !QUESTION_RE.test(body)) kind = "reply_trade";
@@ -610,7 +681,9 @@ export function planMarket(s: GameState, st: Settings, m: MarketInfo, mem: Memor
     const mine = m.mine.find((o) => String(o.res) === rid);
     if (mine) {
       const age = now - (mem.orderPlacedAt[rid] ?? now);
-      if (age > mk.staleHours * 3600_000) {
+      // a bid that is holding up a wanted build is repriced sooner than an idle one
+      const staleAfter = mine.buy && (lacks[rid] ?? 0) > 0 ? Math.min(mk.staleHours, 1) : mk.staleHours;
+      if (age > staleAfter * 3600_000) {
         out.push({ kind: "cancel_order", args: [mine.id], label: `Cancel stale ${mine.buy ? "bid" : "offer"} for ${name}`, reason: `open ${(age / 3600_000).toFixed(1)}h without filling; will re-price`, cost: {}, meta: { resource: Number(rid), side: mine.buy ? "buy" : "sell" } });
       }
       continue;
@@ -618,15 +691,23 @@ export function planMarket(s: GameState, st: Settings, m: MarketInfo, mem: Memor
 
     // 2. BUY what is blocking a wanted build / research / unit, plus hard floors on scarce inputs.
     const blockedBy = lacks[rid] ?? 0;
+    const buyOff = (mem.blocked["market:buy:" + rid] ?? 0) > now, sellOff = (mem.blocked["market:sell:" + rid] ?? 0) > now; // the server refused my last such order
     const floor = mk.stock[rid] ?? 0;
-    const wantBuy = Math.max(blockedBy * 1.15, have < floor * 0.6 ? floor - have : 0);
+    // Size the order for the first (highest priority) waiting item that lacks this resource, not for the biggest shortfall of everything waiting:
+    // a build that lacks 44 Supplies must not be held up by a 1,000-Supplies research bid at a poor price (one standing order per resource).
+    const first = waitingOf(short).find((w) => (w.lacks[rid] ?? 0) > 0);
+    const needNow = first ? first.lacks[rid] : blockedBy;
+    const wantBuy = Math.max(needNow * 1.15, have < floor * 0.6 ? floor - have : 0);
     // Buying is only off the table when money itself is what blocks the wanted item; being below the "sell" comfort level must not stop me buying a missing input.
     const moneyBlocks = (lacks[R.MONEY] ?? 0) > 0;
-    if (wantBuy >= 20 && (!moneyBlocks || have < floor * 0.6) && spendLeft > 0) {
-      const cap = Math.min(info.max, Math.ceil(info.price * mk.maxPriceMult));
+    if (!buyOff && wantBuy >= 20 && (!moneyBlocks || have < floor * 0.6) && spendLeft > 0) {
+      // the quoted price can sit below the allowed minimum (stale quote); the minimum is then the real price, so the cap must never be lower than it
+      const cap = Math.min(info.max, Math.max(Math.ceil(info.price * mk.maxPriceMult), Math.ceil(info.min)));
       const asks = m.asks.filter((o) => String(o.res) === rid && Math.ceil(o.limit) <= cap && o.player !== s.me.id).sort((a, c) => a.limit - c.limit);
-      const limit = Math.min(cap, asks.length ? Math.ceil(asks[0].limit) : Math.ceil(Math.max(info.min, info.price)) + (mem.bidBump[rid] ?? 0));
-      const amount = Math.floor(Math.min(wantBuy, spendLeft / limit));
+      // a limit outside the resource's allowed price band is refused by the server
+      const limit = Math.max(Math.ceil(info.min), Math.min(cap, asks.length ? Math.ceil(asks[0].limit) : Math.ceil(Math.max(info.min, info.price)) + (mem.bidBump[rid] ?? 0)));
+      // never panic-buy: above 2.5x the resource's floor price the buying itself is what drives the price up, and the money is needed for defenders
+      const amount = limit > Math.min(info.max, cap) || limit > Math.floor(info.min * 2.5) ? 0 : Math.floor(Math.min(wantBuy, spendLeft / limit));
       if (amount >= 20) {
         spendLeft -= amount * limit;
         budget[R.MONEY] = (budget[R.MONEY] ?? 0) - amount * limit;
@@ -636,7 +717,7 @@ export function planMarket(s: GameState, st: Settings, m: MarketInfo, mem: Memor
     }
 
     // 3. SELL idle surplus: stock that no wanted item needs, above my keep level, when money is the bottleneck.
-    if (!mk.sell || blockedBy > 0 || perHour < 0) continue;
+    if (!mk.sell || sellOff || blockedBy > 0 || perHour < 0) continue;
     const keep = Math.max(mk.keep[rid] ?? 0, (st.reserve[rid] ?? 0) * 1.5);
     const surplus = have - keep;
     if (surplus < 150) continue;
@@ -667,10 +748,14 @@ export function planCoalition(s: GameState, st: Settings, co: CoalitionInfo, mem
   const now = Date.now();
   const pending = co.list.find((c) => c.pending);
   const warm = (c: { id: number }) => now - (mem.coalitionWarm[String(c.id)] ?? 0) < 48 * 3600_000;
+  const invited = (c: { id: number }) => now - (mem.coalitionInvite[String(c.id)] ?? 0) < 24 * 3600_000;
   if (pending) {
     const age = now - (mem.coalitionTried[String(pending.id)] ?? now);
     // A coalition whose member answered kindly beats one that has been silent: switch (one application at a time).
-    const lead = co.list.find((c) => c.id !== pending.id && warm(c) && now - (mem.coalitionTried[String(c.id)] ?? 0) > 72 * 3600_000);
+    const usable = (c: { id: number }) => (mem.blocked["coalition:" + c.id] ?? 0) < now; // the server refused my last application to it: do not give up a working one for it
+    const invite = co.list.find((c) => c.id !== pending.id && invited(c) && !c.pending && usable(c));
+    if (invite && !invited(pending) && age > 30 * 60_000) return [{ kind: "coalition_withdraw", args: [pending.id], label: `Withdraw application to ${pending.name}`, reason: `${invite.name} invited me to join; taking the invitation instead of waiting`, cost: {} }];
+    const lead = co.list.find((c) => c.id !== pending.id && usable(c) && warm(c) && now - (mem.coalitionTried[String(c.id)] ?? 0) > 72 * 3600_000);
     if (lead && !warm(pending) && age > 30 * 60_000) return [{ kind: "coalition_withdraw", args: [pending.id], label: `Withdraw application to ${pending.name}`, reason: `${lead.name} answered my message kindly - switching to the warmer lead`, cost: {} }];
     if (age > PENDING_HOURS * 3600_000) return [{ kind: "coalition_withdraw", args: [pending.id], label: `Withdraw application to ${pending.name}`, reason: `unanswered for ${(age / 3600_000).toFixed(0)}h; trying the next coalition`, cost: {} }];
     return [];
@@ -681,13 +766,14 @@ export function planCoalition(s: GameState, st: Settings, co: CoalitionInfo, mem
   const frontierOwners = new Set(s.frontier.map((p) => p.owner));
   const cands = co.list
     .filter((c) => now - (mem.coalitionTried[String(c.id)] ?? 0) > 72 * 3600_000)
-    .filter((c) => c.members >= 2) // a lone leader is as inactive-prone as me; real teams first
+    .filter((c) => (mem.blocked["coalition:" + c.id] ?? 0) < now) // my last application to it was refused: wait
+    .filter((c) => c.members >= 2 || invited(c)) // a lone leader is as inactive-prone as me; real teams first (unless they invited me)
     .map((c) => {
       const members = s.players.filter((p) => p.team === c.id);
       const hostile = members.some((p) => warred.has(p.id) || p.rel === -2);
       const borders = members.filter((p) => frontierOwners.has(p.id)).length;
       const progress = (c.score + s.me.vps) / Math.max(1, c.req);
-      return { c, hostile, score: progress * (1 - 0.2 * borders) * (c.members >= 3 ? 1.1 : 1) * (warm(c) ? 3 : 1) };
+      return { c, hostile: hostile && !invited(c), score: progress * (1 - 0.2 * borders) * (c.members >= 3 ? 1.1 : 1) * (warm(c) ? 3 : 1) * (invited(c) ? 10 : 1) };
     })
     .filter((x) => !x.hostile)
     .sort((a, b) => b.score - a.score);

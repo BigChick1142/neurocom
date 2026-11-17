@@ -45,6 +45,8 @@ export interface Settings {
   attackRatio: Record<Mode, number>;  // required strength / estimated defence before attacking
   protectedPlayers: number[];         // never attack
   targetPlayers: number[];            // prefer attacking these (if policy allows)
+  /** An ordered plan: take the named province, then make peace with some players, then go for another player's cities. Empty = no campaign. */
+  campaign: { first: string; peaceWith: number[]; then: number[]; cities: boolean };
   messageLimitPerHour: number;
   market: {
     stock: Record<string, number>; maxSpendPct: number; maxPriceMult: number; staleHours: number;
@@ -82,6 +84,7 @@ export function freshLab(): LabMemory {
 export interface EnemyRecord { stack: number; seen: number; lossesTo: number; lastLoss: number }
 
 export interface Memory {
+  campaign: { key: string; startedAt: number; firstDone: boolean; peaceAt: number }; // progress of Settings.campaign (key = its text, so a changed plan restarts)
   lastMessaged: Record<number, number>;    // playerID -> ts
   lastPeaceOffer: Record<number, number>;
   warDeclaredAt: Record<number, number>;
@@ -103,6 +106,8 @@ export interface Memory {
   enemy: Record<string, EnemyRecord>;      // owner id -> biggest stack seen near my land (decays), how often they took my provinces
   lessons: { t: number; text: string }[]; // human-readable things the bot learned from defeats
   truce: Record<string, number>;           // owner id -> ts until which I stand down against them (I asked for peace while outgunned)
+  moveTries: Record<string, { target: number; t: number; n: number; declared: boolean }>; // army id -> last attack order and whether it took effect
+  coalitionInvite: Record<string, number>; // coalition id -> when one of its members invited me to join
   coalitionWarm: Record<string, number>;   // coalition id -> when one of its members answered my message without hostility
   coalitionTried: Record<string, number>;  // coalition id -> when I last applied (so I never spam one)
   bidBump: Record<string, number>;         // resource id -> price escalation after stale bids   // resource id -> ts of our last bid

@@ -10,7 +10,11 @@ export { gameIdFromUrl } from "./bot/games.js";
 export async function connect(): Promise<{ browser: Browser; page: Page; game: Frame }> {
   const browser = await chromium.connectOverCDP(CDP);
   const ctx = browser.contexts()[0];
-  const page = ctx.pages().find((p) => p.url().includes("play.php")) ?? ctx.pages()[0];
+  // With several games open, CON_GAME_ID picks which one a developer tool talks to (default: the first game tab).
+  const want = process.env.CON_GAME_ID;
+  const withGame = (p: Page) => p.frames().find(isGameFrame);
+  const page = (want ? ctx.pages().find((p) => { const f = withGame(p); return !!f && f.url().includes("gameID=" + want); }) : undefined)
+    ?? ctx.pages().find((p) => p.url().includes("play.php")) ?? ctx.pages()[0];
   const game = page.frames().find(isGameFrame) ?? page.mainFrame();
   return { browser, page, game };
 }
@@ -34,7 +38,7 @@ export async function openSession(): Promise<Session> {
       channel: process.env.CON_BROWSER_CHANNEL || undefined, // e.g. "chrome" or "msedge" to use the browser already installed instead of Playwright's Chromium
       headless: false,
       viewport: { width: 1600, height: 900 },
-      args: ["--remote-debugging-port=9222"],
+      args: ["--remote-debugging-port=9222", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"],
     });
   }
   let page = ctx.pages().find((p) => p.url().includes("play.php")) ?? ctx.pages()[0] ?? (await ctx.newPage());
@@ -62,7 +66,7 @@ export async function openContext(): Promise<{ ctx: BrowserContext; close(): Pro
       channel: process.env.CON_BROWSER_CHANNEL || undefined,
       headless: false,
       viewport: { width: 1600, height: 900 },
-      args: ["--remote-debugging-port=9222"],
+      args: ["--remote-debugging-port=9222", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"],
     });
   }
   return { ctx, close: async () => { await (browser ?? ctx).close().catch(() => {}); } };

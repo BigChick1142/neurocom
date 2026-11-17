@@ -4,7 +4,7 @@
 import type { Memory } from "./types.js";
 
 export type MsgKind =
-  | "apply" | "peace_threat" | "negotiate" | "negotiate_again" | "reply_peace" | "reply_ally" | "reply_trade" | "reply_hostile" | "reply_hello" | "thanks";
+  | "apply" | "peace_threat" | "negotiate" | "negotiate_again" | "reply_peace" | "reply_ally" | "reply_trade" | "reply_hostile" | "reply_hello" | "thanks" | "accept_invite";
 
 const POOLS: Record<MsgKind, string[]> = {
   // asking to join a coalition. {coalition} = its name
@@ -42,6 +42,11 @@ const POOLS: Record<MsgKind, string[]> = {
     "can't commit to anything big right now but i won't come after you",
     "thanks, not looking to join anything atm. no beef from me though",
     "appreciate it - i'm staying flexible for now, but we're good",
+  ],
+  accept_invite: [
+    "yeah sure, sending my application to your coalition now. accept it when you see it",
+    "ok sounds good, applying now. would rather be on the same side anyway",
+    "alright i'm in, just applied. let's stop fighting and team up",
   ],
   reply_trade: [
     "open to trades, just put an offer through the trade screen and i'll look at it",

@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: Settings = {
   attackRatio: { economy: 3.0, balanced: 1.8, aggressive: 1.25 },
   protectedPlayers: [],
   targetPlayers: [],
+  campaign: { first: "", peaceWith: [], then: [], cities: true },
   messageLimitPerHour: 6,
   // stock: floors we always try to hold (scarce inputs only). Everything else is bought only when a wanted build/research/unit is blocked by it.
   market: { stock: { "4": 600, "5": 500 }, maxSpendPct: 0.35, maxPriceMult: 1.3, staleHours: 3, sell: true, keep: { "1": 1500, "2": 1500, "4": 800, "5": 1000, "6": 800 }, sellWhenMoneyBelow: 4 },

@@ -2,7 +2,9 @@
 // (embedded in the served page) so other websites can't drive the bot through the browser.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { computeStats, type Stats } from "./stats.js";
+import { campaignStep } from "../bot/brain.js";
 
 import { researchName } from "../bot/rules.js";
 import type { Bot } from "../bot/runner.js";
@@ -20,6 +22,17 @@ import type { Decision } from "../bot/types.js";
 const HTML = () => readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const KINDS = new Set(["research", "build", "mobilize", "move", "relation", "message", "market", "cancel_order"]);
 
+const statsCache = new Map<string, { at: number; value: Stats }>();
+/** Stats for one game, from its activity and history files (cached for 20 s: the files can be a few MB). */
+export function statsFor(bot: Bot): Stats {
+  const hit = statsCache.get(bot.gameId);
+  if (hit && Date.now() - hit.at < 20_000) return hit.value;
+  const lines = (f: string) => { try { return existsSync(f) ? readFileSync(f, "utf8").split("\n") : []; } catch { return []; } };
+  const value = computeStats(lines(`${bot.dataDir}/activity.jsonl`), lines(`${bot.dataDir}/history.jsonl`));
+  statsCache.set(bot.gameId, { at: Date.now(), value });
+  return value;
+}
+
 export function status(bot: Bot) {
   const s = bot.state;
   return {
@@ -33,6 +46,7 @@ export function status(bot: Bot) {
       players: s.players.filter((p) => p.id !== 0).map((p) => ({ id: p.id, name: p.name, nation: p.nation, team: p.team, vps: p.vps, human: p.human, rel: p.rel ?? null, relBack: p.relBack ?? null })),
     },
     effectiveMode: bot.effectiveMode,
+    campaign: s ? { stage: campaignStep(s, bot.settings, bot.mem).stage, firstDone: bot.mem.campaign.firstDone, peaceAt: bot.mem.campaign.peaceAt } : null,
     threats: s ? assessThreats(s).slice(0, 8) : [],
     market: bot.lastMarket && { prices: bot.lastMarket.prices, mine: bot.lastMarket.mine },
     shortfall: bot.lastShortfall,
@@ -135,6 +149,7 @@ export function startDashboard(manager: GameManager, port = 8787) {
       if (req.method === "GET" && url.pathname === "/api/games") return json(res, 200, manager.list());
       if (req.method === "GET" && url.pathname === "/api/discord/status") { const m = await discordMod().catch(() => null); return json(res, 200, { ...(m ? m.discordStatus() : { configured: false, connected: false, lastError: "Discord support is not installed (run npm install)." }), saved: savedDiscord() }); }
       if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, statusFor(manager, pick(gameParam)));
+      if (req.method === "GET" && url.pathname === "/api/stats") { const b = pick(gameParam); return json(res, 200, b ? statsFor(b) : null); }
       if (req.method === "GET" && url.pathname === "/api/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         clients.set(res, gameParam);

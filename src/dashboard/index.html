@@ -76,6 +76,16 @@
   .attn .item { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:9px; background:var(--raised); }
   .attn .item.warn { background:var(--warn-bg); } .attn .item.bad { background:var(--bad-bg); }
   .attn .ico { flex:none; font-weight:700; }
+  .bars { display:flex; align-items:flex-end; gap:3px; height:84px; }
+  .bars .b { flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:1px; height:100%; min-width:0; }
+  .bars .b i { display:block; border-radius:2px 2px 0 0; min-height:0; }
+  .bars .act { background:var(--accent); opacity:.85; } .bars .gain { background:var(--ok, #22c55e); } .bars .loss { background:var(--bad, #ef4444); }
+  .bars-axis { display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint); margin-top:4px; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); margin-bottom:8px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; max-height:132px; overflow:auto; padding:2px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:13px; cursor:pointer; }
+  .chip input { margin:0; }
   .kpis { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
   .kpi { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; }
   .kpi .l { font-size:12.5px; color:var(--muted); }
@@ -179,7 +189,7 @@
 
 <script>
 const TOKEN = "__TOKEN__";
-const TABS = [["home","Home"],["military","Military"],["economy","Economy"],["diplomacy","Diplomacy"],["activity","Activity"],["settings","Settings"]];
+const TABS = [["home","Home"],["military","Military"],["economy","Economy"],["diplomacy","Diplomacy"],["stats","Stats"],["activity","Activity"],["settings","Settings"]];
 let S = null, tab = "home", logFilter = "important", playerFilter = "", lastSettingsSig = "";
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -409,6 +419,7 @@ function viewSettings() {
       <div class="row"><div class="what"><b>Allow nuclear and chemical weapons</b><div>Off is strongly recommended: it wrecks morale and relations.</div></div><label class="switch"><input type="checkbox" data-sw="allowWmd" ${st.allowWmd ? "checked" : ""} aria-label="Allow weapons of mass destruction"><span></span></label></div></section>
     <section class="card"><h2>Who it may attack</h2><div class="seg" id="wp">${[["none", "Nobody"], ["ai_only", "Computer nations only"], ["non_allies", "Anyone who isn't an ally"]].map(([k, t]) => `<button data-wp="${k}" aria-pressed="${st.warPolicy === k}">${t}</button>`).join("")}</div>
       <p class="sub" style="margin-top:8px">Coalition mates and allies are always protected.</p></section>
+    ${campCard()}
     <section class="card" id="discord-card"><h2>Discord <small>optional: alerts and commands on your phone</small></h2><div class="empty">Loading…</div></section>
     <section class="card"><details><summary>Advanced numbers</summary>
       <div class="grid2">
@@ -526,7 +537,105 @@ document.addEventListener("change", (e) => {
 });
 
 /* ---------- wiring ---------- */
-const VIEWS = { home: viewHome, military: viewMilitary, economy: viewEconomy, diplomacy: viewDiplomacy, activity: viewActivity, settings: viewSettings };
+/* ---------- Stats tab ---------- */
+let STATS = null, statsAt = 0, statsGame = null;
+async function loadStats() {
+  statsAt = Date.now(); statsGame = currentGame;
+  try { STATS = await (await fetch("/api/stats" + gq())).json(); } catch { STATS = null; }
+  if (tab === "stats") render();
+}
+function viewStats() {
+  if (statsGame !== currentGame || Date.now() - statsAt > 30000) { if (!(Date.now() - statsAt < 3000)) loadStats(); }
+  const x = statsGame === currentGame ? STATS : null;
+  if (!x) return `<div class="card"><div class="empty">Loading the numbers…</div></div>`;
+  const g = x.growth, r = x.record;
+  const sg = (v, d) => (v > 0 ? "+" : "") + n1(v) + (d || "");
+  const kp = (l, v, d) => `<div class="kpi"><div class="l">${l}</div><div class="v num">${v}</div><div class="d">${d || "&nbsp;"}</div></div>`;
+  const max = Math.max(1, ...x.perHour.map((h) => h.actions), ...x.perHour.map((h) => h.gained + h.lost));
+  const bars = `<div class="bars" role="img" aria-label="Bot activity over the last 24 hours">${x.perHour.map((h) => `<div class="b" title="${esc(new Date(h.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}: ${h.actions} actions, ${h.gained} provinces gained, ${h.lost} lost"><i class="gain" style="height:${(h.gained / max) * 100}%"></i><i class="loss" style="height:${(h.lost / max) * 100}%"></i><i class="act" style="height:${(h.actions / max) * 100}%"></i></div>`).join("")}</div><div class="bars-axis"><span>24 h ago</span><span>now</span></div>`;
+  const total = x.actions.reduce((a, b) => a + b.n, 0);
+  const days = x.spanHours >= 48 ? n1(x.spanHours / 24) + " days" : n1(x.spanHours) + " hours";
+  return `<div class="stack">
+    <section class="kpis">
+      ${kp("Victory points", n0(g.vpNow), `${sg(g.vpPerHour6, "/h")} last 6h · ${sg(g.vpPerHour24, "/h")} last 24h`)}
+      ${kp("Provinces", n0(g.provincesNow), `${sg(g.provincesDelta24)} in 24h`)}
+      ${kp("Units", n0(g.unitsNow), `${sg(g.unitsDelta24)} in 24h`)}
+      ${kp("Money", n0(g.moneyNow), `${sg(g.moneyDelta24)} in 24h`)}
+      ${kp("Won / lost", `${r.gained} / ${r.lost}`, `provinces taken / lost · ${r.attacks} attack orders`)}
+    </section>
+    <section class="card"><h2>Last 24 hours <small>bot actions per hour, provinces gained and lost</small></h2>
+      <div class="legend"><span><i style="background:var(--accent)"></i>Actions</span><span><i style="background:var(--ok,#22c55e)"></i>Provinces gained</span><span><i style="background:var(--bad,#ef4444)"></i>Provinces lost</span></div>${bars}</section>
+    <div class="grid2">
+      <section class="card"><h2>What the bot did <small>${n0(total)} actions in ${days}</small></h2>${table(["Action", "Times"], x.actions.map((a) => [esc(a.label), n0(a.n)]), "No actions yet.")}</section>
+      <section class="card"><h2>Who took provinces from you</h2>${table(["Nation", "Provinces"], r.lostTo.map((a) => [esc(a.nation), n0(a.n)]), "No province lost so far.")}</section>
+      <section class="card"><h2>Market</h2>${table(["", "Units", "Money"], [["Bought", n0(x.market.bought), n0(x.market.boughtSpend)], ["Sold", n0(x.market.sold), n0(x.market.soldIncome)]], "")}<p class="sub" style="margin-top:8px">Orders placed, counted at their asking price. Fills can differ.</p></section>
+      <section class="card"><h2>Diplomacy</h2>${table(["", "Count"], [["Messages sent", n0(x.diplomacy.messages)], ["Peace offers", n0(x.diplomacy.peaceOffers)], ["Wars declared", n0(x.diplomacy.wars)], ["Coalition applications", n0(x.diplomacy.applications)], ["Applications withdrawn", n0(x.diplomacy.withdrawn)]], "")}</section>
+      <section class="card"><h2>Reliability</h2>${table(["", "Count"], [["Decisions made", n0(S.counters.ticks)], ["Failed actions", n0(S.counters.failures)], ["Refused by the game", n0(S.counters.serverRefused)], ["Warnings logged", n0(x.reliability.warnings)], ["Errors logged", n0(x.reliability.errors)]], "")}</section>
+    </div></div>`;
+}
+
+/* ---------- Campaign card (Settings) ---------- */
+let CAMP = null, campGame = null;
+function campDraft() {
+  const c = S.settings.campaign || { first: "", peaceWith: [], then: [], cities: true };
+  const sig = currentGame + JSON.stringify(c);
+  if (!CAMP || CAMP.sig !== sig) CAMP = { sig, first: c.first || "", peace: new Set(c.peaceWith || []), then: new Set(c.then || []), cities: c.cities !== false };
+  return CAMP;
+}
+function campPlayers(q) {
+  const st = S.state; if (!st) return [];
+  const me = st.me && st.me.id, border = new Set(st.frontier.map((f) => f.owner));
+  const all = st.players.filter((p) => p.id !== me && p.nation && !/insurg|neutral|rebel/i.test(p.nation));
+  const chosen = (p) => CAMP && (CAMP.peace.has(p.id) || CAMP.then.has(p.id));
+  const pool = q ? all.filter((p) => (p.nation + " " + p.name).toLowerCase().includes(q.toLowerCase())) : all.filter((p) => border.has(p.id) || chosen(p));
+  const top = q ? [] : [...all].sort((a, b) => b.vps - a.vps).slice(0, 8);
+  const seen = new Set(); const out = [];
+  for (const p of [...all.filter(chosen), ...pool, ...top]) if (!seen.has(p.id)) { seen.add(p.id); out.push(p); }
+  return out.slice(0, 30);
+}
+function campChips(kind) {
+  const set = kind === "peace" ? CAMP.peace : CAMP.then, q = CAMP.q || "";
+  const list = campPlayers(q);
+  return list.map((p) => `<label class="chip"><input type="checkbox" data-camp="${kind}" value="${p.id}" ${set.has(p.id) ? "checked" : ""}>${esc(p.nation)}${p.human ? "" : " <span class='sub'>(AI)</span>"}${p.vps ? ` <span class='sub'>${n0(p.vps)} VP</span>` : ""}</label>`).join("") || `<span class="sub">No match.</span>`;
+}
+function campCard() {
+  const d = campDraft(), st = S.state, c = S.settings.campaign || {};
+  const stage = S.campaign ? S.campaign.stage : 0, active = !!(c.first || (c.peaceWith || []).length || (c.then || []).length);
+  const players = (st ? st.players : []).filter((p) => p.id !== (st.me && st.me.id)).sort((a, b) => Number(b.human) - Number(a.human) || a.nation.localeCompare(b.nation));
+  const names = [...new Set((st ? st.frontier : []).map((f) => String(f.name).trim()))].sort();
+  const nameOf = (id) => { const p = players.find((q) => q.id === id); return p ? p.nation : "#" + id; };
+  const status = !active ? "No plan set. The bot plays on its own judgement."
+    : stage === 1 ? `Step 1 of 3: taking ${esc(c.first)}.`
+    : stage === 2 ? "Step 2 of 3: offering peace."
+    : stage === 3 ? `Step 3 of 3: ${(c.then || []).length ? "pressing " + esc((c.then || []).map(nameOf).join(", ")) + (c.cities ? ", cities first" : "") : "plan complete"}.` : "Plan saved.";
+  const chips = (kind) => `<div class="chips" id="camp-${kind}">${campChips(kind)}</div>`;
+  return `<section class="card" id="camp-card"><h2>Campaign <small>an ordered plan the bot follows</small></h2>
+    <p class="sub" style="margin-bottom:10px">1. Take one province. 2. Offer peace to chosen players and leave them alone. 3. Press chosen players, cities first. The bot still only attacks when its army is strong enough.</p>
+    <div class="stack" style="gap:12px">
+      <label class="f">1. Take this province first<input id="camp-first" list="camp-names" placeholder="e.g. a province on your border" value="${esc(d.first)}" autocomplete="off"><datalist id="camp-names">${names.map((n) => `<option value="${esc(n)}">`).join("")}</datalist></label>
+      <label class="f">Find a player<input id="camp-q" placeholder="Type a nation or player name (borders and top players are listed by default)" value="${esc(d.q || "")}" autocomplete="off"></label>
+      <div><div class="sub" style="margin-bottom:4px">2. Then make peace with</div>${chips("peace")}</div>
+      <div><div class="sub" style="margin-bottom:4px">3. Then attack</div>${chips("then")}</div>
+      <div><label class="chip" style="display:inline-flex"><input type="checkbox" id="camp-cities" ${d.cities ? "checked" : ""}>Cities first</label></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap"><button class="preset" id="camp-save" style="width:auto">Save plan</button><button class="preset" id="camp-clear" style="width:auto">Clear plan</button></div>
+      <p class="sub" id="camp-status"><b>${status}</b></p></div></section>`;
+}
+document.addEventListener("input", (e) => {
+  if (!CAMP) return;
+  if (e.target.id === "camp-first") CAMP.first = e.target.value;
+  else if (e.target.id === "camp-q") { CAMP.q = e.target.value; for (const k of ["peace", "then"]) { const box = $("camp-" + k); if (box) box.innerHTML = campChips(k); } }
+});
+document.addEventListener("change", (e) => {
+  const el = e.target; if (!CAMP) return;
+  if (el.dataset && el.dataset.camp) { const set = el.dataset.camp === "peace" ? CAMP.peace : CAMP.then; const v = Number(el.value); if (el.checked) set.add(v); else set.delete(v); }
+  else if (el.id === "camp-cities") CAMP.cities = el.checked;
+});
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#camp-save")) { const d = campDraft(); save({ campaign: { first: d.first.trim(), peaceWith: [...d.peace], then: [...d.then], cities: d.cities } }, "Campaign saved"); }
+  else if (e.target.closest("#camp-clear")) { CAMP = null; save({ campaign: { first: "", peaceWith: [], then: [], cities: true } }, "Campaign cleared"); }
+});
+
+const VIEWS = { home: viewHome, military: viewMilitary, economy: viewEconomy, diplomacy: viewDiplomacy, stats: viewStats, activity: viewActivity, settings: viewSettings };
 function renderGameSelect() {
   const sel = $("game"); const games = S.games || [];
   const sig = JSON.stringify(games.map((g) => [g.id, g.nation, g.day, g.vp])) + (S.gameId || "");
@@ -542,7 +651,7 @@ function renderHeader() {
   const s = S.state, st = S.settings;
   $("dot").className = "dot" + (S.connected ? " on" : "");
   $("conn").textContent = !S.connected ? "Not connected" : !st.enabled ? "Paused" : st.dryRun ? "Preview only" : "Online";
-  $("who").textContent = s ? `${s.me.nation} · day ${s.day}` : "";
+  $("who").textContent = (S.games || []).length > 1 ? "" : (s ? `${s.me.nation} · day ${s.day}` : ""); // with the game selector shown, the nation is already in it
   if (s) { const pct = Math.min(100, (s.me.vps / (s.vpLimit || 1)) * 100); $("vptext").innerHTML = `<b class="num">${n0(s.me.vps)}</b> / ${n0(s.vpLimit)}`; $("vpbar").style.width = pct + "%"; }
   const p = $("pause"); p.textContent = st.enabled ? "Pause bot" : "Resume bot"; p.className = "btn " + (st.enabled ? "stop" : "primary");
   const wait = S.needsHuman.length;
@@ -562,7 +671,7 @@ function render() {
     if (typing) return;
   }
   const keepFocus = document.activeElement && document.activeElement.id === "pf";
-  const sig = tab === "settings" ? JSON.stringify(S.settings) : null;
+  const sig = tab === "settings" ? JSON.stringify(S.settings) + (S.campaign ? S.campaign.stage : "") : null;
   if (tab === "settings" && sig === lastSettingsSig && $("main").dataset.tab === "settings" && document.activeElement && $("main").contains(document.activeElement)) return; // don't clobber a field being edited
   lastSettingsSig = sig;
   $("main").dataset.tab = tab;

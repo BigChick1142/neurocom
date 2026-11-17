@@ -6,7 +6,7 @@ const ctx = await chromium.launchPersistentContext("profile", {
   channel: process.env.CON_BROWSER_CHANNEL || undefined,
   headless: false,
   viewport: { width: 1600, height: 900 },
-  args: ["--remote-debugging-port=9222"],
+  args: ["--remote-debugging-port=9222", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"],
 });
 const page = ctx.pages()[0] ?? (await ctx.newPage());
 await page.goto(PLAY_URL, { waitUntil: "domcontentloaded" });

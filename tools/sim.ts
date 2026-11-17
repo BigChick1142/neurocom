@@ -1,6 +1,7 @@
 // Offline tests for the brain with synthetic game states: npx tsx tools/sim.ts
 import assert from "node:assert/strict";
-import { assessThreats, chooseMode, planBuilds, planDefense, planDiplomacy, planCoalition, planAirSea, planTruceHalts, planRally, waitingOf, capitalInDanger, roleOf, findTargets, planMarket, planMessages, planMilitary, planMobilize, planResearch, type MarketInfo, type ProvOptions } from "../src/bot/brain.js";
+import { computeStats } from "../src/dashboard/stats.js";
+import { assessThreats, chooseMode, planBuilds, planDefense, planDiplomacy, planCoalition, planAirSea, planTruceHalts, planRally, waitingOf, capitalInDanger, roleOf, findTargets, planCampaign, campaignStep, planMarket, planMessages, planMilitary, planMobilize, planResearch, type MarketInfo, type ProvOptions } from "../src/bot/brain.js";
 import { evaluateAttacks, tuneFromAttacks, tuneUnitCap } from "../src/bot/tuner.js";
 import { DEFAULT_SETTINGS } from "../src/bot/settings.js";
 import { freshLab, type Army, type GameState, type Memory, type Prov, type Settings } from "../src/bot/types.js";
@@ -27,7 +28,7 @@ wf(pj(FIXTURE, "researchTypes.json"), JSON.stringify({}));
 setRulesDir(FIXTURE);
 import { buildIntel, learnedDefence, lossLesson, trackActivity, updateEnemyRecords, weaknessMultiplier, type RawIntel } from "../src/bot/intel.js";
 
-const mem = (): Memory => ({ lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() });
+const mem = (): Memory => ({ campaign: { key: "", startedAt: 0, firstDone: false, peaceAt: 0 }, coalitionInvite: {}, lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, moveTries: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() });
 const settings = (o: Partial<Settings> = {}): Settings => ({ ...structuredClone(DEFAULT_SETTINGS), ...o });
 const prov = (id: number, o: Partial<Prov> = {}): Prov => ({ id, name: "P" + id, owner: 92, city: false, vp: 1, x: id * 10, y: 0, morale: 70, adj: [], ...o });
 const army = (id: number, o: Partial<Army> = {}): Army => ({ id, owner: 92, loc: 1, x: 0, y: 0, size: 3, moving: false, fight: 0, units: [{ t: 1, h: 1, k: 0, n: "Motorized Infantry" }], air: false, sea: false, removed: false, str: 10, def: 10, hp: 40, maxhp: 40, name: "A" + id, ...o });
@@ -185,6 +186,103 @@ ok("diplomacy: offers peace only to neighbours/enemies that are not targets", ()
   assert.ok(out.some((d) => d.args[0] === 11 && d.args[1] === 1));
   const s2 = base(); s2.players.push({ id: 77, name: "Far", nation: "Peru", team: 0, vps: 50, human: true, cap: 70, rel: undefined });
   assert.ok(!planDiplomacy(s2, settings({ warPolicy: "none" }), mem()).some((d) => d.args[0] === 77));
+});
+ok("market: a stale quote below the allowed minimum still buys, at the minimum; a refused resource is left alone for a while", () => {
+  const s = base(); s.resources["4"].amount = 100;
+  const market: MarketInfo = { prices: { "4": { price: 5, min: 9, max: 27 } }, asks: [], bids: [], mine: [] }; // quoted 5, but the server only accepts 9..27
+  const budget = () => Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));
+  const out = planMarket(s, settings(), market, mem(), budget());
+  assert.equal(out.length, 1, "buys");
+  assert.ok((out[0].args as number[])[2] >= 9, "limit is inside the allowed band");
+  const m = mem(); m.blocked["market:buy:4"] = Date.now() + 3600_000;
+  assert.equal(planMarket(s, settings(), market, m, budget()).length, 0, "backs off after a refusal");
+});
+ok("campaign: take the named province first, then offer peace and leave them alone, then press the other player's cities", () => {
+  const s = base();
+  s.frontier = [prov(50, { owner: 11, city: true, vp: 5, x: 300, y: 0, name: "Ubon" }), prov(51, { owner: 13, city: false, vp: 1, x: 350, y: 20, name: "Village" }), prov(52, { owner: 13, city: true, vp: 4, x: 360, y: 40, name: "Capitalia" })];
+  s.players.push({ id: 13, name: "Chin", nation: "China", team: 0, vps: 100, human: true, cap: 70, rel: undefined });
+  const st = settings({ mode: "balanced", campaign: { first: "Ubon", peaceWith: [11], then: [13], cities: true } });
+  const m = mem();
+  // step 1: only Ubon is attacked
+  assert.deepEqual(findTargets(s, st, m).map((t) => t.prov.name), ["Ubon"]);
+  assert.equal(planCampaign(s, st, m).length, 0, "no peace offer yet");
+  // Ubon is taken: peace offer to its old owner (once), and they are no longer targets
+  s.provinces.push(prov(50, { owner: 92, city: true, vp: 5, x: 300, y: 0, name: "Ubon" })); s.frontier = s.frontier.filter((f) => f.id !== 50);
+  const offer = planCampaign(s, st, m);
+  assert.ok(offer.some((d) => d.kind === "relation" && d.args[0] === 11 && d.args[1] === 1), "offers peace");
+  assert.equal(planCampaign(s, st, m).length, 0, "only once");
+  s.frontier.push(prov(53, { owner: 11, city: true, vp: 9, x: 280, y: 0, name: "Border" }));
+  assert.ok(!findTargets(s, st, m).some((t) => t.prov.owner === 11), "spares the peace partner");
+  // step 3: China's city outranks its village
+  const t = findTargets(s, st, m);
+  assert.equal(t[0].prov.name, "Capitalia");
+  // a changed plan restarts from step 1
+  assert.equal(campaignStep(s, settings({ campaign: { first: "Border", peaceWith: [], then: [], cities: true } }), m).stage, 1);
+});
+ok("coalition invitation: a member's invite is answered yes, replaces a silent application, and beats the hostile / lone-leader filters", () => {
+  const s = base();
+  s.players[0] = { ...s.players[0], id: 6, name: "Indy", nation: "India", team: 12, human: true, rel: -2 }; // the attacker, leading a one-member coalition
+  s.frontier = [prov(50, { owner: 6, city: true, vp: 5, x: 300, y: 0 })];
+  const m = mem(); m.lastMessaged[6] = Date.now() - 3600_000; m.warDeclaredAt[6] = Date.now() - 7200_000;
+  const out = planMessages(s, settings(), m, [{ uid: 1, from: 6, to: 92, body: "It's not bad, will you join my coalition?", time: 0, read: false, mine: false }]);
+  assert.ok(out.some((d) => d.kind === "message" && d.args[0] === 6 && /appl|in|team/i.test(String(d.args[1]))), "answers yes");
+  assert.ok(!out.some((d) => String(d.label).startsWith("NEEDS A HUMAN")), "not left for a human");
+  assert.ok(m.coalitionInvite["12"] > 0, "invitation recorded");
+  // a silent application is withdrawn in favour of the invitation ...
+  const co = { mine: null, list: [{ id: 1, name: "STRYKER", members: 5, score: 400, req: 5920, leader: 13, pending: true }, { id: 12, name: "ASEAN", members: 1, score: 94, req: 1850, leader: 6, pending: false }] };
+  m.coalitionTried["1"] = Date.now() - 3600_000;
+  const w = planCoalition(s, settings(), co, m);
+  assert.equal(w[0].kind, "coalition_withdraw"); assert.equal(w[0].args[0], 1);
+  // ... and once nothing is pending, the invited coalition is applied to despite the war and its single member
+  const co2 = { mine: null, list: co.list.map((c) => ({ ...c, pending: false })) };
+  m.coalitionTried["1"] = Date.now() - 80 * 3600_000;
+  const a = planCoalition(s, settings(), co2, m);
+  assert.equal(a[0].kind, "coalition_apply"); assert.equal(a[0].args[0], 12);
+  // without an invitation the same coalition is still refused (hostile, lone leader)
+  assert.ok(!planCoalition(s, settings(), co2, mem()).some((d) => d.kind === "coalition_apply" && d.args[0] === 12));
+});
+ok("coalition: a pending application is not swapped for a coalition whose application the server just refused", () => {
+  const s = base(); const m = mem();
+  m.coalitionWarm["12"] = Date.now(); m.coalitionTried["8"] = Date.now() - 3600_000;
+  const co = { mine: null, list: [{ id: 8, name: "NATO", members: 4, score: 300, req: 5365, leader: 20, pending: true }, { id: 12, name: "ASEAN", members: 2, score: 94, req: 1850, leader: 6, pending: false }] };
+  assert.equal(planCoalition(s, settings(), co, m)[0]?.kind, "coalition_withdraw", "baseline: the warm lead wins");
+  m.blocked["coalition:12"] = Date.now() + 3600_000;
+  assert.equal(planCoalition(s, settings(), co, m).length, 0, "refused lead is not chased");
+});
+ok("stats: counts actions, records, market volume and growth from the log and history", () => {
+  const now = 1_000_000_000_000, H = 3600_000;
+  const log = [
+    { t: now - 30 * 60_000, level: "ok", kind: "build", text: "Build Arms Industry in X" },
+    { t: now - 29 * 60_000, level: "ok", kind: "move", text: "Attack Ubon with DQ 1 (str 5.0)" },
+    { t: now - 28 * 60_000, level: "ok", kind: "market", text: "Buy 100 Supplies @ 5  (short)" },
+    { t: now - 27 * 60_000, level: "ok", kind: "market", text: "Sell 200 Fuel @ 4" },
+    { t: now - 26 * 60_000, level: "ok", kind: "conquest", text: "Gained province Ubon" },
+    { t: now - 25 * 60_000, level: "info", kind: "loss", text: "Lost Surin to India (time #1). Nothing was defending it" },
+    { t: now - 24 * 60_000, level: "ok", kind: "relation", text: "Offer peace to India (X)" },
+    { t: now - 23 * 60_000, level: "ok", kind: "relation", text: "Declare war on China (Y)" },
+    { t: now - 22 * 60_000, level: "warn", kind: "server", text: "Server refused UltOrderAction (code -1)" },
+    { t: now - 21 * 60_000, level: "warn", kind: "move", text: "Attack Z -> refused: nope" },
+  ].map((e) => JSON.stringify(e));
+  const hist = [{ t: now - 24 * H, vp: 50, provinces: 30, units: 5, money: 1000 }, { t: now - 6 * H, vp: 70, provinces: 35, units: 8, money: 500 }, { t: now, vp: 76, provinces: 36, units: 9, money: 900 }].map((e) => JSON.stringify(e));
+  const st = computeStats([...log, "not json"], hist, now);
+  assert.equal(st.record.gained, 1); assert.equal(st.record.lost, 1); assert.equal(st.record.attacks, 1);
+  assert.deepEqual(st.record.lostTo, [{ nation: "India", n: 1 }]);
+  assert.equal(st.market.bought, 100); assert.equal(st.market.boughtSpend, 500); assert.equal(st.market.sold, 200); assert.equal(st.market.soldIncome, 800);
+  assert.equal(st.diplomacy.peaceOffers, 1); assert.equal(st.diplomacy.wars, 1);
+  assert.equal(st.reliability.refused, 1); assert.equal(st.reliability.warnings, 2);
+  assert.equal(st.actions.find((a) => a.kind === "market")?.n, 2);
+  assert.equal(st.growth.vpNow, 76); assert.equal(st.growth.provincesDelta24, 6);
+  assert.ok(Math.abs(st.growth.vpPerHour24 - 26 / 24) < 0.01 && Math.abs(st.growth.vpPerHour6 - 1) < 0.01);
+  assert.equal(st.perHour.length, 24); assert.equal(st.perHour.reduce((a, h) => a + h.gained + h.lost, 0), 2);
+  assert.equal(computeStats([], [], now).growth.vpNow, 0, "empty files are fine");
+});
+ok("market: never panic-buys far above the floor price", () => {
+  const s = base(); s.resources["4"].amount = 100;
+  const budget = () => Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));
+  const calm: MarketInfo = { prices: { "4": { price: 12, min: 9, max: 27 } }, asks: [], bids: [], mine: [] };
+  assert.equal(planMarket(s, settings(), calm, mem(), budget()).length, 1, "buys at a normal price");
+  const panic: MarketInfo = { prices: { "4": { price: 22, min: 9, max: 27 } }, asks: [{ id: 9, buy: false, amount: 500, limit: 23, res: 4, player: 5 }], bids: [], mine: [] };
+  assert.equal(planMarket(s, settings(), panic, mem(), budget()).length, 0, "does not buy at 23 when the floor is 9");
 });
 ok("market: bids when low, never overspends, cancels stale bid and escalates", () => {
   const s = base(); s.resources["4"].amount = 100;
@@ -637,6 +735,43 @@ ok("discord setup: the app id comes from the token, .env keeps other lines, ids 
   assert.equal((after.match(/DISCORD_TOKEN=/g) ?? []).length, 1);
   assert.equal(validateIds({ guildId: "123456789012345678", channelId: "", ownerId: "123456789012345678" }), null);
   assert.ok(validateIds({ guildId: "abc" }) !== null && validateIds({ ownerId: "12" }) !== null);
+});
+ok("builds: upgrades with no cost data (the server accepts them but never starts them) are never ordered", () => {
+  const s = base();
+  const p = s.provinces.find((x) => x.freeSlot)!;
+  const options = new Map([[p.id, { upgrades: [{ id: 2244, name: "Population level 5", costs: {}, daily: {} }], productions: [] }]]);
+  const rich = Object.fromEntries(Object.keys(s.resources).map((k) => [k, 1e9]));
+  assert.equal(planBuilds(s, settings(), options, { ...rich }, {}).length, 0);
+  const real = new Map([[p.id, { upgrades: [{ id: 2275, name: "Arms Industry", costs: { "20": 1250 }, daily: {} }], productions: [] }]]);
+  assert.equal(planBuilds(s, settings(), real, { ...rich }, {}).length, 1);
+});
+ok("military: an attack order that does not take effect (game wants a war declaration) -> declare war once, retry once, then back off; no order spam", () => {
+  const s = base(); // the target owner has NO recorded stance, like a fresh game where nobody is at war by default
+  s.players[0].rel = undefined;
+  const m = mem();
+  const send = (out: ReturnType<typeof planMilitary>) => out.filter((d) => d.kind === "move" && d.args.length);
+  // tick 1: the order goes out (the runner records it as attempt 1)
+  const t1 = planMilitary(s, settings({ mode: "balanced" }), m);
+  const moves = send(t1); assert.ok(moves.length >= 1);
+  for (const d of moves) { const k = String(d.args[0]); m.moveTries[k] = { target: d.meta!.target!, t: Date.now(), n: 1, declared: false }; }
+  // tick 2: armies did not start moving -> NO repeat orders; one war declaration instead
+  const t2 = planMilitary(s, settings({ mode: "balanced" }), m);
+  assert.equal(send(t2).length, 0, "no repeated orders");
+  assert.equal(t2.filter((d) => d.kind === "relation" && d.args[1] === -2).length, 1, "exactly one declaration");
+  // tick 3: war declared -> a single retry (the runner records attempt 2)
+  const t3 = planMilitary(s, settings({ mode: "balanced" }), m);
+  const retry = send(t3); assert.ok(retry.length >= 1, "retries once");
+  assert.equal(t3.filter((d) => d.kind === "relation").length, 0, "does not declare again");
+  for (const d of retry) m.moveTries[String(d.args[0])] = { ...m.moveTries[String(d.args[0])], n: 2, t: Date.now() };
+  // tick 4: still not moving -> back off for 2h, nothing sent
+  const t4 = planMilitary(s, settings({ mode: "balanced" }), m);
+  assert.equal(send(t4).length, 0, "gives up");
+  assert.ok(Object.keys(m.blocked).some((k) => k.startsWith("move:")), "blocked for a while");
+  assert.equal(send(planMilitary(s, settings({ mode: "balanced" }), m)).length, 0, "stays quiet afterwards");
+  // an army that IS moving clears its record
+  const m2 = mem(); m2.moveTries[String(s.armies[0].id)] = { target: 1, t: Date.now(), n: 1, declared: false }; s.armies[0].moving = true;
+  planMilitary(s, settings({ mode: "balanced" }), m2);
+  assert.equal(m2.moveTries[String(s.armies[0].id)], undefined);
 });
 ok("auto mode: economy early, balanced mid, aggressive only with strength + money", () => {
   const s = base(); s.day = 1;

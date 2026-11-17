@@ -305,6 +305,21 @@
     return { ok: true };
   };
 
+  // Cancel "declare an unprovoked war" confirmations. Only dialogs whose text is about declaring war are touched.
+  B.dismissWarDialogs = () => {
+    let n = 0;
+    const all = [...document.querySelectorAll("*")];
+    for (const el of all) {
+      if (el.children.length || (el.textContent || "").trim() !== "Cancel" || !el.offsetParent) continue;
+      let box = el.parentElement;
+      for (let i = 0; i < 8 && box; i++, box = box.parentElement) {
+        const txt = box.textContent || "";
+        if (/declare\s+an?\s+(unprovoked\s+)?war/i.test(txt) && txt.length < 600) { el.click(); n++; break; }
+      }
+    }
+    return n;
+  };
+
   window.__bot = B;
   return true;
 })();

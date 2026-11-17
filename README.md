@@ -33,7 +33,7 @@ dashboard shows everything and lets you steer.
 
 <p align="center"><img src="docs/img/dashboard-discord.png" alt="Discord setup card: paste a bot token, pick a server and channel" width="92%"></p>
 
-Hover any chart for the exact numbers at that moment. Everything the bot decides is explained in plain English, and anything it will not guess at (a question from another player) is left for you.
+The **Stats** tab shows what the bot has actually done: victory points per hour, provinces won and lost (and to whom), a 24-hour activity chart, market volume, diplomacy counts and reliability numbers. Hover any chart for the exact numbers at that moment. Everything the bot decides is explained in plain English, and anything it will not guess at (a question from another player) is left for you.
 
 ## Quick start (Windows)
 
@@ -44,6 +44,10 @@ Hover any chart for the exact numbers at that moment. Everything the bot decides
 5. **`Stop Neurocom.cmd`** stops it. Use the dashboard's **Pause bot** button to keep it connected but idle.
 
 Optional: set the environment variable `CON_BROWSER_CHANNEL=chrome` (or `msedge`) to use the browser already installed instead of Playwright's Chromium (note: a different browser needs a fresh login).
+
+## Campaign: tell it the plan
+
+In **Settings → Campaign** you can give a game an ordered plan: take one named province first, then make peace with chosen players, then press other players' cities. While step 1 runs the bot only attacks that province; after taking it, it offers peace to the chosen players (once, with a short message) and leaves them alone; then it favours the chosen players' cities. The usual strength margin still applies, so it builds up first when it is too weak, and it will not attack a player who has no border with you.
 
 ## Discord (optional)
 
@@ -93,7 +97,7 @@ State is saved in `data/`: `settings.json`, `memory.json` (so restarts don't re-
 | Command | What |
 |---------|------|
 | `npm start` | Bot + dashboard (http://127.0.0.1:8787) |
-| `npm test` | 54 offline scenario tests of the planners (synthetic game states) |
+| `npm test` | 63 offline scenario tests of the planners (synthetic game states) |
 | `npm run typecheck` | TypeScript check |
 | `npm run report` | Progress / action / refusal summary from `data/*.jsonl` |
 | `npm run ev "<js>"` | Evaluate JS inside the live game page |
@@ -108,7 +112,10 @@ sent to the Anthropic API; replies are text only and can never trigger actions).
 * Dashboard binds to localhost, mutating calls need a per-session token.
 * Silent no-ops are detected (an order that changes nothing twice is blocked for 12h); server refusals are logged per action type.
 * Watchdog reloads the game if its state stops updating for 12 minutes.
-* Market spending is capped per order and a money floor is kept; stale bids are cancelled and re-priced.
+* Market spending is capped per order and a money floor is kept; stale bids are cancelled and re-priced. It never buys far above the floor price (that only drives the price up), keeps inside the price band the game allows, and backs off for two hours when the game refuses an order.
+* An order that the game accepts but does not carry out (for example an attack that is waiting on a war-declaration confirmation) is detected: it declares war once, retries once, then backs off instead of repeating the order.
+* Auto mode holds a mode for 15 minutes so enemy stacks flickering in and out of view cannot flip the build order back and forth.
+* Coalition applications the game refuses back off (30 minutes up to 12 hours), and an invitation from a coalition member is answered and taken instead of waiting on a silent application.
 
 ## Strategy in one paragraph
 

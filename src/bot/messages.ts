@@ -1,6 +1,7 @@
 // Everything the bot says to other players lives here.
 // Rules: sound like a normal player (short, lowercase-ish, no corporate filler), never send the same text to the same
 // person twice, say nothing when there is nothing worth saying, and never invent facts about myself.
+import { kb } from "./knowledge.js";
 import type { Memory } from "./types.js";
 
 export type MsgKind =
@@ -79,8 +80,10 @@ export function compose(kind: MsgKind, to: number, mem: Pick<Memory, "sentTexts"
   const used = new Set(mem.sentTexts[String(to)] ?? []);
   const pool = POOLS[kind];
   const start = hash(String(to) + kind) % pool.length;
-  for (let i = 0; i < pool.length; i++) {
-    const text = fill(pool[(start + i) % pool.length], vars);
+  // wordings that people actually answered come first; ones never tried read as average, so they still get a turn
+  const order = pool.map((_, i) => (start + i) % pool.length).map((idx, rank) => ({ idx, rank, score: kb.textScore(fill(pool[idx], vars)) })).sort((a, b) => b.score - a.score || a.rank - b.rank);
+  for (const { idx } of order) {
+    const text = fill(pool[idx], vars);
     if (!used.has(norm(text))) return text;
   }
   return null;

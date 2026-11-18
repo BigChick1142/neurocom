@@ -5,6 +5,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { computeStats, type Stats } from "./stats.js";
 import { campaignStep } from "../bot/brain.js";
+import { kb } from "../bot/knowledge.js";
+import { combatSummary } from "../bot/lab.js";
 
 import { researchName } from "../bot/rules.js";
 import type { Bot } from "../bot/runner.js";
@@ -46,6 +48,7 @@ export function status(bot: Bot) {
       players: s.players.filter((p) => p.id !== 0).map((p) => ({ id: p.id, name: p.name, nation: p.nation, team: p.team, vps: p.vps, human: p.human, rel: p.rel ?? null, relBack: p.relBack ?? null })),
     },
     effectiveMode: bot.effectiveMode,
+    combat: combatSummary(bot.mem.lab),
     campaign: s ? { stage: campaignStep(s, bot.settings, bot.mem).stage, firstDone: bot.mem.campaign.firstDone, peaceAt: bot.mem.campaign.peaceAt } : null,
     threats: s ? assessThreats(s).slice(0, 8) : [],
     market: bot.lastMarket && { prices: bot.lastMarket.prices, mine: bot.lastMarket.mine },
@@ -149,6 +152,7 @@ export function startDashboard(manager: GameManager, port = 8787) {
       if (req.method === "GET" && url.pathname === "/api/games") return json(res, 200, manager.list());
       if (req.method === "GET" && url.pathname === "/api/discord/status") { const m = await discordMod().catch(() => null); return json(res, 200, { ...(m ? m.discordStatus() : { configured: false, connected: false, lastError: "Discord support is not installed (run npm install)." }), saved: savedDiscord() }); }
       if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, statusFor(manager, pick(gameParam)));
+      if (req.method === "GET" && url.pathname === "/api/knowledge") return json(res, 200, kb.summary());
       if (req.method === "GET" && url.pathname === "/api/stats") { const b = pick(gameParam); return json(res, 200, b ? statsFor(b) : null); }
       if (req.method === "GET" && url.pathname === "/api/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -196,6 +200,7 @@ export function startDashboard(manager: GameManager, port = 8787) {
           await bot.manual(d);
           return json(res, 200, { ok: true });
         }
+        if (url.pathname === "/api/knowledge/reset") { kb.reset(); kb.save(); return json(res, 200, { ok: true }); }
         if (url.pathname === "/api/dismiss") { const t = Number(body.t); for (const n of bot.mem.needsHuman) if (n.t === t) n.resolved = true; bot.emit("update"); return json(res, 200, { ok: true }); }
         if (url.pathname === "/api/tick") { bot.tick().catch(() => {}); return json(res, 200, { ok: true }); }
       }

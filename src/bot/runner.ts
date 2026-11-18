@@ -6,7 +6,8 @@ import type { Session } from "../browser.js";
 import { call, inject } from "../inject.js";
 import { draftReply } from "./llm.js";
 import { evaluateAttacks, tuneFromAttacks, tuneUnitCap } from "./tuner.js";
-import { planCampaign, waitingOf, type Waiting, findTargets, assessThreats, chooseMode, planDefense, budgetOf, planMarket, type MarketInfo, type Shortfall, type CoalitionInfo, planCoalition, planBuilds, planDiplomacy, planMessages, planMilitary, planTruceHalts, planRally, planAirSea, planMobilize, capitalInDanger, planResearch, type InboxMsg, type ProvOptions, type ResearchOpt } from "./brain.js";
+import { kb } from "./knowledge.js";
+import { planCampaign, roleOf, waitingOf, type Waiting, findTargets, assessThreats, chooseMode, planDefense, budgetOf, planMarket, type MarketInfo, type Shortfall, type CoalitionInfo, planCoalition, planBuilds, planDiplomacy, planMessages, planMilitary, planTruceHalts, planRally, planAirSea, planMobilize, capitalInDanger, planResearch, type InboxMsg, type ProvOptions, type ResearchOpt } from "./brain.js";
 import { loadSettings, patchSettings, saveSettings } from "./settings.js";
 import { freshLab, type Decision, type GameState, type Memory, type Settings } from "./types.js";
 import { dumpRules } from "../dumpmod.js";
@@ -27,7 +28,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function loadMemory(dir: string): Memory {
   const MEM_FILE = `${dir}/memory.json`;
-  const fresh: Memory = { campaign: { key: "", startedAt: 0, firstDone: false, peaceAt: 0 }, coalitionInvite: {}, lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, moveTries: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() };
+  const fresh: Memory = { campaign: { key: "", startedAt: 0, firstDone: false, peaceAt: 0 }, coalitionInvite: {}, lastSent: {}, peaceOpen: {}, coalitionOpen: null, lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, moveTries: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() };
   try { if (existsSync(MEM_FILE)) return { ...fresh, ...JSON.parse(readFileSync(MEM_FILE, "utf8")) }; } catch { /* start fresh */ }
   return fresh;
 }
@@ -44,7 +45,13 @@ export class Bot extends EventEmitter {
     super();
     this.gameId = opts.gameId;
     this.dataDir = opts.dataDir;
+    const brandNew = !existsSync(`${this.dataDir}/settings.json`);
     this.settings = loadSettings(this.dataDir);
+    if (brandNew && this.settings.useKnowledge) {
+      const seed = kb.seedParams(); // earlier games settled these risk knobs: start from them instead of the generic defaults
+      if (seed) this.settings = { ...this.settings, attackRatio: { ...this.settings.attackRatio, ...seed.attackRatio }, maxUnits: { ...this.settings.maxUnits, ...Object.fromEntries(Object.entries(seed.maxUnits).map(([k, v]) => [k, Math.round(v)])) } };
+    }
+    kb.seenGame(this.gameId);
     this.mem = loadMemory(this.dataDir);
     this.history = (() => {
       try {
@@ -202,10 +209,11 @@ export class Bot extends EventEmitter {
       const lost = this.trackChanges(s);
       if (lost.length) await this.learnFromLosses(game, s, lost);
       this.prevState = s; // next tick compares against this (used to explain a loss)
-      trackLab(s, this.mem.lab);
+      trackLab(s, this.mem.lab, Date.now(), (k, n, a, c) => kb.recordUnit(k, n, a, c));
       updateEnemyRecords(s, this.mem.enemy);
       this.idleHours = trackActivity(s.otherArmies.filter((a) => !a.removed), Object.fromEntries(s.players.map((p) => [p.id, p.vps])), this.mem.activity);
       this.verifyPending(s);
+      this.trackKnowledge(s);
       this.runTuner(s);
       this.sampleHistory(s);
 
@@ -223,6 +231,21 @@ export class Bot extends EventEmitter {
       saveMemory(this.mem, this.dataDir);
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** Close the loop on things I started earlier: did the peace offer get accepted, did the coalition take me? */
+  private trackKnowledge(s: GameState) {
+    const now = Date.now();
+    for (const [pid, o] of Object.entries(this.mem.peaceOpen)) {
+      const p = s.players.find((x) => x.id === Number(pid));
+      if (p && (p.rel ?? -2) >= 1) { kb.recordPeace(o.kind, true); delete this.mem.peaceOpen[pid]; }
+      else if (now - o.t > 12 * 3600_000) { kb.recordPeace(o.kind, false); delete this.mem.peaceOpen[pid]; }
+    }
+    const co = this.mem.coalitionOpen;
+    if (co && this.lastCoalitions) {
+      if (this.lastCoalitions.mine === co.id) { kb.recordCoalition(co.size, "joined", (now - co.t) / 3600_000); this.mem.coalitionOpen = null; }
+      else if (now - co.t > 20 * 3600_000) this.mem.coalitionOpen = null; // never answered
     }
   }
 
@@ -252,6 +275,8 @@ export class Bot extends EventEmitter {
     const { done, keep } = evaluateAttacks(s, this.mem.attacks, now);
     this.mem.attacks = keep;
     const patches: Partial<Settings>[] = [];
+    for (const d of done) { const at = (this.mem.lab.attacks ??= { won: 0, failed: 0 }); if (d.result === "success") at.won++; else at.failed++; }
+    for (const d of done) if (d.rec.ratio !== undefined) kb.recordBattle(d.rec.human ? "human" : "ai", d.rec.ratio, d.result === "success");
     if (done.length) {
       const r = tuneFromAttacks(this.settings, done);
       for (const n of r.notes) this.log("info", "tuner", n, "system");
@@ -260,6 +285,7 @@ export class Bot extends EventEmitter {
     }
     if (now - this.mem.lastTune > 3600_000) {
       this.mem.lastTune = now;
+      kb.recordParams(this.settings.attackRatio, this.settings.maxUnits);
       const r = tuneUnitCap(s, this.settings, this.effectiveMode);
       for (const n of r.notes) this.log("info", "tuner", n, "system");
       if (Object.keys(r.patch).length) this.settings = { ...this.settings, ...r.patch };
@@ -293,11 +319,13 @@ export class Bot extends EventEmitter {
       const info = await call<{ name: string; owner: number; x?: number; y?: number } | null>(game, "provinceOwner", id).catch(() => null);
       const text = lossLesson(s, this.mem.enemy, info?.name ?? String(id), info?.owner, now, { prev: this.prevState, x: info?.x, y: info?.y });
       this.log("warn", "loss", text.split(" Lesson:")[0]);
+      kb.recordLoss(text.includes("Nothing was defending"));
       const lesson = text.slice(text.indexOf("Lesson:"));
       const last = this.mem.lessons[this.mem.lessons.length - 1];
       const repeat = last && now - last.t < 3 * 3600_000 && last.text.slice(last.text.indexOf("Lesson:")).slice(0, 70) === lesson.slice(0, 70);
       if (text.includes("Lesson:") && !repeat) {
         this.mem.lessons.push({ t: now, text });
+        kb.addLesson(text);
         if (this.mem.lessons.length > 30) this.mem.lessons.shift();
         this.log("info", "lesson", text.slice(text.indexOf("Lesson:")), "bot");
       }
@@ -308,6 +336,7 @@ export class Bot extends EventEmitter {
     const now = Date.now();
     if (now - this.lastHistoryT < 5 * 60_000 && this.history.length) return;
     this.lastHistoryT = now;
+    kb.recordPace(s.day, s.me.vps, s.provinces.length, s.armies.reduce((a, x) => a + x.units.length, 0), s.resources["20"]?.amount ?? 0);
     const pt: HistoryPoint = { t: now, vp: s.me.vps, provinces: s.provinces.length, units: s.armies.reduce((a, x) => a + x.units.length, 0), money: Math.round(s.resources["20"]?.amount ?? 0), day: s.day };
     this.history.push(pt);
     if (this.history.length > 2000) this.history.shift();
@@ -380,12 +409,21 @@ export class Bot extends EventEmitter {
     // A critically small army (under 8 units incl. those in training) trains first: economy and research only get what is left over.
     const unitCount = s.armies.reduce((a, x) => a + x.units.length, 0) + s.provinces.reduce((a, p) => a + (p.producing ?? 0), 0);
     const tinyArmy = unitCount < 8;
+    // No province can train ground units (their buildings were lost or never built) and the army is tiny: the building that unlocks training comes before everything else, on a thin cushion, even in an emergency.
+    const groundCapable = [...options.values()].some((o) => o.productions.some((u) => { const r = roleOf(u); return r === "inf" || r === "armor" || r === "arty" || r === "aa"; }));
+    let fastBuilt = new Set<number>();
+    if (st.doBuild && tinyArmy && !groundCapable) {
+      const thin = Object.fromEntries(Object.entries(st.reserve).map(([k, v]) => [k, v * 0.2]));
+      const fast = planBuilds(s, st, options, budget, this.mem.blocked, short, lab, { only: /^(Army Base|Recruiting Office)/, reserve: thin });
+      plan.push(...fast);
+      fastBuilt = new Set(fast.map((d) => Number(d.args[0])));
+    }
     if (st.mode === "aggressive" || opportunity || tinyArmy) {
       if (st.doMobilize) plan.push(...planMobilize(s, st, options, budget, this.mem.blocked, short, lab, emergency));
-      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab));
+      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab, { skip: fastBuilt }));
       await research();
     } else {
-      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab));
+      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab, { skip: fastBuilt }));
       await research();
       if (st.doMobilize) plan.push(...planMobilize(s, st, options, budget, this.mem.blocked, short, lab, emergency));
     }
@@ -394,7 +432,11 @@ export class Bot extends EventEmitter {
 
     if (st.doMarket) {
       const m = await call<MarketInfo>(game, "market").catch(() => null);
-      if (m) { this.lastMarket = m; plan.push(...planMarket(s, st, m, this.mem, budget, short)); }
+      if (m) for (const [rid, info] of Object.entries(m.prices)) kb.recordPrice(rid, Math.max(info.price, info.min));
+      // On war footing or with a tiny army the market uses the same thin cushion as training does (otherwise it can barely spend), and buys only for the top-priority order.
+      const urgent = emergency || tinyArmy;
+      const mst = urgent ? { ...st, reserve: Object.fromEntries(Object.entries(st.reserve).map(([k, v]) => [k, v * (emergency ? 0.15 : 0.25)])) } : st;
+      if (m) { this.lastMarket = m; plan.push(...planMarket(s, mst, m, this.mem, budget, short, urgent)); }
     }
 
     if (st.doMilitary) {
@@ -418,6 +460,11 @@ export class Bot extends EventEmitter {
     if (st.doMessaging) {
       const inbox = await call<InboxMsg[]>(game, "inbox").catch(() => []);
       this.lastInbox = inbox.slice(-60);
+      for (const m of inbox) { // an answer to something I sent: remember which wording gets answered
+        if (m.mine || this.mem.seenInbox.includes(m.uid)) continue;
+        const ls = this.mem.lastSent[String(m.from)];
+        if (ls && !ls.replied && Date.now() - ls.t < 24 * 3600_000) { ls.replied = true; kb.recordReply(ls.text); }
+      }
       plan.push(...planMessages(s, st, this.mem, inbox));
     }
     return plan;
@@ -477,6 +524,7 @@ export class Bot extends EventEmitter {
         this.mem.blocked[nKey] = n;
         const wait = Math.min(12 * 60, 30 * 2 ** (n - 1));
         this.mem.blocked["coalition:" + d.args[0]] = Date.now() + wait * 60_000;
+        kb.recordCoalition(this.mem.coalitionOpen?.size ?? 1, "refused"); this.mem.coalitionOpen = null;
         this.log("info", "coalition", `Coalition application refused by the server (${n}x); will retry in ${wait} min`, source);
       }
       if (d.kind === "market" && this.counters.serverRefused > refusedBefore) {
@@ -493,7 +541,7 @@ export class Bot extends EventEmitter {
       this.mem.moveTries[k] = prev && prev.target === d.meta.target && now - prev.t < 20 * 60_000 ? { ...prev, t: now, n: prev.n + 1 } : { target: d.meta.target, t: now, n: 1, declared: false };
       const army = this.state?.armies.find((a) => String(a.id) === String(d.args[0]));
       let rec = this.mem.attacks.find((x) => x.target === d.meta!.target && now - x.t < 30 * 60_000);
-      if (!rec) { rec = { t: now, target: d.meta.target, mode: this.effectiveMode, ids: [], units: 0 }; this.mem.attacks.push(rec); }
+      if (!rec) { rec = { t: now, target: d.meta.target, mode: this.effectiveMode, ids: [], units: 0, ratio: d.meta.ratio, human: d.meta.human }; this.mem.attacks.push(rec); }
       if (army && !rec.ids.includes(army.id)) { rec.ids.push(army.id); rec.units += army.units.length; }
       this.mem.assigned[String(d.args[0])] = { target: d.meta.target, t: now };
     }
@@ -508,13 +556,25 @@ export class Bot extends EventEmitter {
       const before = d.kind === "build" ? prov?.constructing ?? 0 : prov?.producing ?? 0;
       this.pending.push({ key: d.kind + ":" + pid + ":" + uid, kind: d.kind, pid, uid, before, label: d.label });
     }
-    if (d.kind === "message") { this.mem.lastMessaged[d.args[0] as number] = now; this.mem.sentMessagesLog.push(now); }
+    if (d.kind === "message") {
+      this.mem.lastMessaged[d.args[0] as number] = now; this.mem.sentMessagesLog.push(now);
+      const text = String(d.args[1] ?? ""); if (text) { this.mem.lastSent[String(d.args[0])] = { text, t: now, replied: false }; kb.recordSent(text); }
+    }
     if (d.kind === "cancel_order" && d.meta?.resource !== undefined && d.meta.side !== "sell") { const k = String(d.meta.resource); this.mem.bidBump[k] = Math.min(12, (this.mem.bidBump[k] ?? 0) + 2); }
     if (d.kind === "market") this.mem.orderPlacedAt[String(d.args[3])] = now;
-    if (d.kind === "coalition_apply") this.mem.coalitionTried[String(d.args[0])] = now;
+    if (d.kind === "coalition_apply") {
+      this.mem.coalitionTried[String(d.args[0])] = now;
+      const size = this.lastCoalitions?.list.find((c) => c.id === d.args[0])?.members ?? 1;
+      this.mem.coalitionOpen = { id: Number(d.args[0]), size, t: now };
+      kb.recordCoalition(size, "applied");
+    }
     if (d.kind === "relation") {
       const [pid, rel] = d.args as [number, number];
-      if (rel === -2) this.mem.warDeclaredAt[pid] = now; else this.mem.lastPeaceOffer[pid] = now;
+      if (rel === -2) this.mem.warDeclaredAt[pid] = now;
+      else {
+        this.mem.lastPeaceOffer[pid] = now;
+        if (rel >= 1 && !d.label.startsWith("Accept peace") && !this.mem.peaceOpen[String(pid)]) this.mem.peaceOpen[String(pid)] = { t: now, kind: this.state?.players.find((p) => p.id === pid)?.human ? "human" : "ai" };
+      }
     }
   }
 

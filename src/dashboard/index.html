@@ -76,6 +76,15 @@
   .attn .item { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:9px; background:var(--raised); }
   .attn .item.warn { background:var(--warn-bg); } .attn .item.bad { background:var(--bad-bg); }
   .attn .ico { flex:none; font-weight:700; }
+  .clickable { cursor:pointer; } tr.clickable:hover td { background:rgba(34,211,238,.07); } tr.sel td { background:rgba(34,211,238,.13); }
+  th[data-plsort] { cursor:pointer; user-select:none; } th[data-plsort]:hover { color:var(--text); }
+  .hbar { display:flex; align-items:center; gap:8px; font-size:13px; margin:5px 0; }
+  .hbar .lab { width:74px; color:var(--muted); flex:none; } .hbar .track { flex:1; height:12px; background:rgba(127,127,127,.18); border-radius:6px; overflow:hidden; }
+  .hbar .fill { height:100%; background:var(--accent); border-radius:6px; } .hbar .fill.hi { background:var(--ok,#22c55e); } .hbar .fill.lo { background:var(--bad,#ef4444); }
+  .hbar .val { width:104px; text-align:right; color:var(--muted); flex:none; } .hbar:hover .lab, .hbar:hover .val { color:var(--text); }
+  .mini { display:flex; gap:8px; flex-wrap:wrap; } .mini .tag { cursor:default; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; } .btns button { width:auto; }
+  .pw { height:10px; border-radius:6px; background:rgba(127,127,127,.2); overflow:hidden; margin:8px 0; } .pw i { display:block; height:100%; background:linear-gradient(90deg,var(--accent),#6366f1); }
   .bars { display:flex; align-items:flex-end; gap:3px; height:84px; }
   .bars .b { flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:1px; height:100%; min-width:0; }
   .bars .b i { display:block; border-radius:2px 2px 0 0; min-height:0; }
@@ -189,7 +198,7 @@
 
 <script>
 const TOKEN = "__TOKEN__";
-const TABS = [["home","Home"],["military","Military"],["economy","Economy"],["diplomacy","Diplomacy"],["stats","Stats"],["activity","Activity"],["settings","Settings"]];
+const TABS = [["home","Home"],["military","Military"],["economy","Economy"],["diplomacy","Diplomacy"],["players","Players"],["stats","Stats"],["brain","Brain"],["activity","Activity"],["settings","Settings"]];
 let S = null, tab = "home", logFilter = "important", playerFilter = "", lastSettingsSig = "";
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -199,7 +208,7 @@ const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); if (s < 60)
 const clock = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 const REL = { "-2":["War","bad"], "-1":["Ceasefire","warn"], "0":["Embargo","warn"], "1":["Peace","ok"], "2":["Non-aggression","ok"], "3":["Right of way","ok"], "4":["Pact","ok"], "5":["Mutual protection","ok"], "6":["Shared intel","ok"], "7":["Army command","ok"] };
-const relTag = (r) => { const x = r === null || r === undefined ? ["War (default)","bad"] : (REL[String(r)] || ["Stance " + r, ""]); return `<span class="tag ${x[1]}">${esc(x[0])}</span>`; };
+const relTag = (r) => { const x = r === null || r === undefined ? ["No treaty (not at war)",""] : (REL[String(r)] || ["Stance " + r, ""]); return `<span class="tag ${x[1]}">${esc(x[0])}</span>`; };
 
 let currentGame = null;
 const gq = () => (currentGame ? "?game=" + encodeURIComponent(currentGame) : "");
@@ -316,6 +325,7 @@ function viewHome() {
       ${kp("Money", n0(money.amount), `<span class="${money.perHour >= 0 ? "up" : "down"}">${money.perHour >= 0 ? "+" : ""}${n0(money.perHour)}/h</span>`)}
       ${kp("Game day", n0(s?.day), "")}
     </section>
+    ${winCard()}
     <section><div class="seg" style="margin-bottom:10px">${[["6h", "Last 6 hours"], ["24h", "Last 24 hours"], ["all", "Everything"]].map(([k, l]) => `<button data-range="${k}" aria-pressed="${chartRange === k}">${l}</button>`).join("")}</div><div class="cols">${trendCard("Victory points", "vp", "var(--accent)", n0)}${trendCard("Provinces", "provinces", "var(--ok)", n0)}${trendCard("Money", "money", "var(--warn)", n0)}</div><p class="sub" style="margin-top:6px">Hover (or touch and drag) a chart to see the exact numbers at that moment.</p></section>
     <section class="cols">
       <div class="card"><h2>What it just decided <small>this round</small></h2>${plan.length ? `<div class="list">${plan.map((p) => `<div><span class="main">${esc(p.label)}<div class="why">${esc(p.reason || "")}</div></span></div>`).join("")}</div>` : `<div class="empty">Nothing new to do right now. It's waiting for money, strength or time.</div>`}</div>
@@ -544,6 +554,25 @@ async function loadStats() {
   try { STATS = await (await fetch("/api/stats" + gq())).json(); } catch { STATS = null; }
   if (tab === "stats") render();
 }
+function unitRows(list, withStar) {
+  return list.map((u, i) => [`${withStar && i === 0 && (u.kills > 0) ? "★ " : ""}<b>${esc(u.name)}</b>`, esc(u.cls || "-"), n0(u.fielded), n0(u.kills), n0(u.lost), n1(u.kd), u.fielded ? n1(u.avgLife !== undefined ? u.avgLife : u.hours / u.fielded) + " h" : "-"]);
+}
+function combatSection() {
+  const c = S.combat; if (!c) return "";
+  const best = c.units.find((u) => u.kills > 0);
+  const kp = (l, v, d) => `<div class="kpi"><div class="l">${l}</div><div class="v num">${v}</div><div class="d">${d || "&nbsp;"}</div></div>`;
+  const att = c.attacks.won + c.attacks.failed;
+  const classBars = c.classes.filter((x) => x.kills + x.lost > 0).map((x) => hbar(x.cls, x.kills / Math.max(1, x.kills + x.lost), `${x.kills} kills · ${x.lost} lost`, x.kills >= x.lost ? "hi" : "lo", `${x.cls}: ${x.kills} kills against ${x.lost} units lost`)).join("");
+  return `<section class="kpis">
+      ${kp("Kill / death", c.kills + c.lost ? n1(c.kd) : "-", `${n0(c.kills)} kills · ${n0(c.lost)} units lost`)}
+      ${kp("Attacks that worked", att ? Math.round(c.attackRate * 100) + "%" : "-", att ? `${c.attacks.won} of ${att} judged` : "none judged yet")}
+      ${kp("Most helpful unit", best ? esc(best.name) : "-", best ? `${n0(best.kills)} kills · ${n0(best.lost)} lost` : "needs a few fights")}
+    </section>
+    <section class="card"><h2>Units ranked by how much they helped <small>kills earned per unit lost, against the value they tied up</small></h2>
+      ${c.units.length ? table(["Unit", "Type", "Fielded", "Kills", "Lost", "K/D", "Avg life"], unitRows(c.units.slice(0, 12), true), "") : `<div class="empty">No units tracked yet.</div>`}
+      ${classBars ? `<h2 style="margin-top:12px">By branch</h2>${classBars}` : ""}
+      <p class="sub" style="margin-top:8px">Kills come from the game's own per-unit counter. A unit counts as lost when it disappears from my armies. ${c.units.length ? "The ★ marks the unit that has helped most so far." : ""}</p></section>`;
+}
 function viewStats() {
   if (statsGame !== currentGame || Date.now() - statsAt > 30000) { if (!(Date.now() - statsAt < 3000)) loadStats(); }
   const x = statsGame === currentGame ? STATS : null;
@@ -563,6 +592,7 @@ function viewStats() {
       ${kp("Money", n0(g.moneyNow), `${sg(g.moneyDelta24)} in 24h`)}
       ${kp("Won / lost", `${r.gained} / ${r.lost}`, `provinces taken / lost · ${r.attacks} attack orders`)}
     </section>
+    ${combatSection()}
     <section class="card"><h2>Last 24 hours <small>bot actions per hour, provinces gained and lost</small></h2>
       <div class="legend"><span><i style="background:var(--accent)"></i>Actions</span><span><i style="background:var(--ok,#22c55e)"></i>Provinces gained</span><span><i style="background:var(--bad,#ef4444)"></i>Provinces lost</span></div>${bars}</section>
     <div class="grid2">
@@ -635,7 +665,156 @@ document.addEventListener("click", (e) => {
   else if (e.target.closest("#camp-clear")) { CAMP = null; save({ campaign: { first: "", peaceWith: [], then: [], cities: true } }, "Campaign cleared"); }
 });
 
-const VIEWS = { home: viewHome, military: viewMilitary, economy: viewEconomy, diplomacy: viewDiplomacy, stats: viewStats, activity: viewActivity, settings: viewSettings };
+/* ---------- Path to victory (Home) ---------- */
+function winCard() {
+  const s = S.state; if (!s) return "";
+  const hist = S.history || [], last = hist.length ? hist[hist.length - 1] : null;
+  const ref = last ? (hist.find((h) => h.t >= last.t - 6 * 3600e3) || hist[0]) : null;
+  const rate = last && ref && last.t > ref.t ? (last.vp - ref.vp) / ((last.t - ref.t) / 3600e3) : 0;
+  const left = Math.max(0, s.vpLimit - s.me.vps), eta = rate > 0.05 ? left / rate : null;
+  const co = S.coalitions, mine = co && co.mine ? co.list.find((c) => c.id === co.mine) : null;
+  const byId = new Map(s.players.map((p) => [p.id, p]));
+  const prot = new Set(S.settings.protectedPlayers || []);
+  const picks = s.frontier.filter((f) => { const o = byId.get(f.owner); return !prot.has(f.owner) && !(o && o.team && o.team === s.me.team); }).sort((a, b) => (Number(b.city) - Number(a.city)) || b.vp - a.vp).slice(0, 3);
+  const pace = eta === null ? "" : eta < 48 ? `about ${n0(eta)} hours at the current pace` : `about ${n1(eta / 24)} days at the current pace`;
+  const campFirst = S.settings.campaign && S.settings.campaign.first;
+  return `<section class="card"><h2>Path to victory <small>${n0(s.me.vps)} of ${n0(s.vpLimit)} VP</small></h2>
+    <div class="pw" role="img" aria-label="Victory progress"><i style="width:${Math.min(100, (s.me.vps / Math.max(1, s.vpLimit)) * 100).toFixed(1)}%"></i></div>
+    <p><b>${n1(rate)} VP/h</b> over the last 6 hours: ${!left ? "you have reached the limit." : eta === null ? (rate < 0 ? "victory points are falling right now." : "victory points are not growing right now.") : "winning alone would take " + pace + "."}</p>
+    ${mine ? `<p class="sub">In <b>${esc(mine.name)}</b> (${mine.members} members): ${n0(mine.score)} of ${n0(mine.req)} VP together. A coalition shares one limit, which is usually the faster way to win.</p>` : `<p class="sub">Not in a coalition. Members share one victory limit, so each needs far fewer points than playing alone.</p>`}
+    ${picks.length ? `<h2 style="margin-top:12px">Best next conquests <small>cities and big provinces on your border</small></h2><div class="list">${picks.map((f) => { const o = byId.get(f.owner); return `<div><span class="main"><b>${esc(f.name)}</b> ${f.city ? '<span class="tag ok">city</span>' : ""} <span class="sub">${n1(f.vp)} VP · ${esc(o ? o.nation : "neutral")}</span></span><button class="preset" style="width:auto" data-takefirst="${esc(f.name)}" ${campFirst === f.name ? "disabled" : ""}>${campFirst === f.name ? "Current goal" : "Take this next"}</button></div>`; }).join("")}</div>` : ""}</section>`;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-takefirst]"); if (!b || !S) return;
+  const c = S.settings.campaign || { first: "", peaceWith: [], then: [], cities: true };
+  save({ campaign: { first: b.dataset.takefirst, peaceWith: c.peaceWith || [], then: c.then || [], cities: c.cities !== false } }, "Goal set: take " + b.dataset.takefirst + " first");
+});
+
+/* ---------- Players tab ---------- */
+const PL = { q: "", sort: "vp", dir: -1, f: "all", sel: null };
+function playerRows() {
+  const st = S.state; if (!st) return [];
+  const border = new Map(); for (const f of st.frontier) { const a = border.get(f.owner) || []; a.push(f); border.set(f.owner, a); }
+  const intel = new Map([...(S.intel.weakest || []), ...(S.intel.neighbours || [])].map((r) => [r.id, r]));
+  const enemy = new Map((S.enemies || []).map((e) => [e.id, e]));
+  const threat = new Set((S.threats || []).filter((t) => t.threat >= 3).flatMap((t) => t.owners));
+  return st.players.filter((p) => p.id !== st.me.id && p.nation && !/insurg|neutral|rebel/i.test(p.nation)).map((p) => {
+    const i = intel.get(p.id) || {};
+    return { ...p, border: border.get(p.id) || [], weak: i.weakness || 0, why: i.why || [], enemy: enemy.get(p.id), threat: threat.has(p.id), ally: !!(p.team && p.team === st.me.team) };
+  });
+}
+const PL_FILTERS = [["all", "Everyone"], ["border", "Neighbours"], ["war", "At war (declared)"], ["threat", "Threatening me"], ["human", "Players"], ["weak", "Weak"], ["ally", "My coalition"]];
+function plMatch(r) {
+  if (PL.q && !(r.nation + " " + r.name).toLowerCase().includes(PL.q.toLowerCase())) return false;
+  switch (PL.f) { case "border": return r.border.length > 0; case "war": return r.rel !== null && r.rel <= -2; case "threat": return r.threat; case "human": return r.human; case "weak": return r.weak > 0.5; case "ally": return r.ally; default: return true; }
+}
+function viewPlayers() {
+  const rows = playerRows().filter(plMatch);
+  const val = { vp: (r) => r.vps, name: (r) => r.nation, rel: (r) => (r.rel === null ? 0 : r.rel), border: (r) => r.border.length, weak: (r) => r.weak };
+  const f = val[PL.sort] || val.vp;
+  rows.sort((a, b) => { const x = f(a), y = f(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * PL.dir; });
+  const th = (k, l) => `<th data-plsort="${k}" aria-sort="${PL.sort === k ? (PL.dir > 0 ? "ascending" : "descending") : "none"}">${l}${PL.sort === k ? (PL.dir > 0 ? " ▲" : " ▼") : ""}</th>`;
+  const head = `<tr>${th("name", "Player")}<th>Type</th>${th("vp", "VP")}${th("rel", "Relation")}${th("border", "Border")}${th("weak", "Weakness")}</tr>`;
+  const body = rows.slice(0, 80).map((r) => `<tr class="clickable ${PL.sel === r.id ? "sel" : ""}" data-plsel="${r.id}" tabindex="0"><td><b>${esc(r.nation)}</b><div class="sub">${esc(r.name)}</div></td><td>${r.human ? "Player" : "Computer"}</td><td class="num">${n0(r.vps)}</td><td>${relTag(r.rel)}${r.ally ? ' <span class="tag ok">team</span>' : ""}${r.threat ? ' <span class="tag bad">threat</span>' : ""}</td><td class="num">${r.border.length || "-"}</td><td>${r.weak > 0 ? `<span class="tag ${r.weak > 0.8 ? "ok" : r.weak > 0.5 ? "warn" : ""}">${n1(r.weak)}</span>` : "-"}</td></tr>`).join("");
+  return `<div class="stack">
+    <section class="card"><h2>Players <small>click a row to see what the bot knows and to act</small></h2>
+      <div class="row" style="gap:10px; flex-wrap:wrap; margin-bottom:10px"><input id="pl-q" placeholder="Search nation or player" value="${esc(PL.q)}" style="max-width:260px" autocomplete="off">
+      <div class="seg" id="pl-f">${PL_FILTERS.map(([k, l]) => `<button data-plf="${k}" aria-pressed="${PL.f === k}">${l}</button>`).join("")}</div></div>
+      ${rows.length ? `<div class="scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>${rows.length > 80 ? `<p class="sub">Showing the first 80 of ${rows.length}. Use the search to narrow it down.</p>` : ""}` : `<div class="empty">Nobody matches. Try another filter.</div>`}
+    </section>${plDetail()}</div>`;
+}
+function plDetail() {
+  const r = playerRows().find((x) => x.id === PL.sel);
+  if (!r) return `<section class="card"><div class="empty">Pick a player above to see their border provinces, how weak they look, and quick actions: offer peace, send a message, protect or target them.</div></section>`;
+  const st = S.settings, c = st.campaign || { first: "", peaceWith: [], then: [], cities: true };
+  const prot = (st.protectedPlayers || []).includes(r.id), targ = (st.targetPlayers || []).includes(r.id);
+  const inPeace = (c.peaceWith || []).includes(r.id), inThen = (c.then || []).includes(r.id);
+  const provs = r.border.slice().sort((a, b) => (Number(b.city) - Number(a.city)) || b.vp - a.vp);
+  const facts = [r.human ? "Human player" : "Computer nation", `${n0(r.vps)} VP`, r.ally ? "in my coalition" : r.team ? "in a coalition" : "no coalition"];
+  if (r.enemy && r.enemy.lossesTo) facts.push(`took ${r.enemy.lossesTo} of my provinces`);
+  if (r.enemy && r.enemy.stack) facts.push(`biggest stack I saw: ${n1(r.enemy.stack)}`);
+  return `<section class="card" id="pl-detail"><h2>${esc(r.nation)} <small>${esc(r.name)}</small></h2>
+    <div class="mini" style="margin-bottom:10px">${relTag(r.rel)}${facts.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>
+    ${r.weak > 0 ? `<p class="sub"><b>Weakness ${n1(r.weak)}</b>${r.why.length ? ": " + esc(r.why.slice(0, 3).join(", ")) : ""}</p>` : ""}
+    ${provs.length ? `<h2 style="margin-top:8px">Their provinces on my border</h2><div class="list">${provs.slice(0, 8).map((f) => `<div><span class="main"><b>${esc(f.name)}</b> ${f.city ? '<span class="tag ok">city</span>' : ""} <span class="sub">${n1(f.vp)} VP</span></span><button class="preset" style="width:auto" data-takefirst="${esc(f.name)}">Take this next</button></div>`).join("")}</div>` : `<p class="sub">They have no province on my border right now.</p>`}
+    <h2 style="margin-top:12px">Actions</h2>
+    <div class="btns"><button class="preset" data-pa="peace">Offer peace</button><button class="preset" data-pa="war">Declare war…</button>
+      <button class="preset" data-pa="protect" aria-pressed="${prot}">${prot ? "Protected: never attacked" : "Protect (never attack)"}</button>
+      <button class="preset" data-pa="target" aria-pressed="${targ}">${targ ? "Preferred target" : "Prefer as target"}</button>
+      <button class="preset" data-pa="cpeace" aria-pressed="${inPeace}">${inPeace ? "Campaign: peace partner" : "Campaign: make peace"}</button>
+      <button class="preset" data-pa="cthen" aria-pressed="${inThen}">${inThen ? "Campaign: attack target" : "Campaign: attack later"}</button></div>
+    <div style="margin-top:12px"><textarea data-plmsg rows="2" placeholder="Write a message to ${esc(r.name)}" style="width:100%"></textarea><div class="btns" style="margin-top:6px"><button class="preset" data-pa="msg">Send message</button></div></div></section>`;
+}
+document.addEventListener("click", (e) => {
+  const sel = e.target.closest("[data-plsel]"), sort = e.target.closest("[data-plsort]"), flt = e.target.closest("[data-plf]"), act = e.target.closest("[data-pa]");
+  if (sel) { PL.sel = Number(sel.dataset.plsel); render(); const d = $("pl-detail"); if (d) d.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  else if (sort) { const k = sort.dataset.plsort; if (PL.sort === k) PL.dir = -PL.dir; else { PL.sort = k; PL.dir = k === "name" ? 1 : -1; } render(); }
+  else if (flt) { PL.f = flt.dataset.plf; render(); }
+  else if (act && S) plAct(act.dataset.pa);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset && e.target.dataset.plsel) { PL.sel = Number(e.target.dataset.plsel); render(); } });
+document.addEventListener("input", (e) => { if (e.target.id === "pl-q") { PL.q = e.target.value; const pos = e.target.selectionStart; render(); const q = $("pl-q"); if (q) { q.focus(); q.setSelectionRange(pos, pos); } } });
+function plAct(kind) {
+  const r = playerRows().find((x) => x.id === PL.sel); if (!r) return;
+  const st = S.settings, toggle = (arr) => { const a = (arr || []).slice(), i = a.indexOf(r.id); if (i >= 0) a.splice(i, 1); else a.push(r.id); return a; };
+  const c = st.campaign || { first: "", peaceWith: [], then: [], cities: true };
+  if (kind === "peace") post("/api/command", { kind: "relation", args: [r.id, 1], label: "Offer peace to " + r.nation + " (from the Players tab)" }).then(() => toast("Peace offer sent to " + r.nation));
+  else if (kind === "war") { if (confirm("Declare war on " + r.nation + " (" + r.name + ")? This cannot be undone from here.")) post("/api/command", { kind: "relation", args: [r.id, -2], label: "Declare war on " + r.nation + " (from the Players tab)" }).then(() => toast("War declared on " + r.nation)); }
+  else if (kind === "protect") save({ protectedPlayers: toggle(st.protectedPlayers) }, "Updated protected players");
+  else if (kind === "target") save({ targetPlayers: toggle(st.targetPlayers) }, "Updated preferred targets");
+  else if (kind === "cpeace") save({ campaign: { ...c, peaceWith: toggle(c.peaceWith) } }, "Campaign updated");
+  else if (kind === "cthen") save({ campaign: { ...c, then: toggle(c.then) } }, "Campaign updated");
+  else if (kind === "msg") { const box = document.querySelector("[data-plmsg]"), text = (box && box.value || "").trim(); if (!text) { toast("Type a message first"); return; } post("/api/command", { kind: "message", args: [r.id, text], label: "Message sent from the Players tab" }).then(() => { box.value = ""; toast("Sent"); }); }
+}
+
+/* ---------- Brain tab: what it has learned across every game on this PC ---------- */
+let KBD = null, kbAt = 0;
+async function loadKb() { kbAt = Date.now(); try { KBD = await (await fetch("/api/knowledge")).json(); } catch { KBD = null; } if (tab === "brain") render(); }
+function hbar(label, frac, value, cls, tip) { return `<div class="hbar" title="${esc(tip || "")}"><span class="lab">${esc(label)}</span><span class="track"><span class="fill ${cls || ""}" style="width:${Math.round(Math.max(0, Math.min(1, frac || 0)) * 100)}%;display:block"></span></span><span class="val">${value}</span></div>`; }
+function paceChart(k) {
+  const mine = new Map(); for (const h of S.history || []) if (h.day) mine.set(h.day, h.vp);
+  const typ = k.pace.filter((p) => p.vp >= 0), days = [...new Set([...typ.map((p) => p.day), ...mine.keys()])].sort((a, b) => a - b);
+  if (days.length < 2) return `<div class="empty">The pace curve appears after a few game days of data.</div>`;
+  const W = 560, H = 170, pad = 28, maxV = Math.max(1, ...typ.map((p) => p.vp), ...mine.values()), x = (d) => pad + ((d - days[0]) / Math.max(1, days[days.length - 1] - days[0])) * (W - pad * 2), y = (v) => H - pad - (v / maxV) * (H - pad * 2);
+  const line = (pts, col) => pts.length > 1 ? `<polyline fill="none" stroke="${col}" stroke-width="2.4" points="${pts.map(([d, v]) => x(d).toFixed(1) + "," + y(v).toFixed(1)).join(" ")}"/>` : "";
+  const dots = (pts, col, name) => pts.map(([d, v]) => `<circle cx="${x(d).toFixed(1)}" cy="${y(v).toFixed(1)}" r="4" fill="${col}"><title>${name}, day ${d}: ${n0(v)} VP</title></circle>`).join("");
+  const a = typ.map((p) => [p.day, p.vp]), b = [...mine].sort((p, q) => p[0] - q[0]);
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Victory points by game day: this game against the typical game"><line x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}" stroke="currentColor" opacity=".25"/>${line(a, "#94a3b8")}${line(b, "#22d3ee")}${dots(a, "#94a3b8", "Typical game")}${dots(b, "#22d3ee", "This game")}<text x="${pad}" y="${H - 8}" font-size="9" fill="currentColor" opacity=".6">day ${days[0]}</text><text x="${W - pad}" y="${H - 8}" font-size="9" text-anchor="end" fill="currentColor" opacity=".6">day ${days[days.length - 1]}</text><text x="${pad}" y="14" font-size="9" fill="currentColor" opacity=".6">${n0(maxV)} VP</text></svg><div class="legend"><span><i style="background:#94a3b8"></i>Typical game (all games so far)</span><span><i style="background:#22d3ee"></i>This game</span></div>`;
+}
+function viewBrain() {
+  if (Date.now() - kbAt > 30000 && !(Date.now() - kbAt < 3000)) loadKb();
+  const k = KBD; if (!k) return `<div class="card"><div class="empty">Loading what it has learned…</div></div>`;
+  const on = S.settings.useKnowledge !== false;
+  const rate = (r) => (r.rate === null ? 0 : r.rate);
+  const battles = (kind, title) => `<div><div class="sub" style="margin-bottom:4px"><b>${title}</b>${k.required[kind] ? ` · wins from about <b>${n1(k.required[kind])}×</b> their defence` : " · not enough fights yet"}</div>${k.battleRows[kind].map((r) => hbar(r.label + "×", rate(r), r.won + r.lost ? `${Math.round(rate(r) * 100)}% (${r.won}/${r.won + r.lost})` : "no data", rate(r) >= 0.7 ? "hi" : rate(r) < 0.4 && r.won + r.lost >= 3 ? "lo" : "", `${r.won} attacks won, ${r.lost} failed at ${r.label}× their estimated defence`)).join("")}</div>`;
+  const coal = k.coalition.map((c) => [`${esc(c.size)} members`, n0(c.applied), n0(c.joined), n0(c.refused), c.avgHours === null ? "-" : n1(c.avgHours) + " h"]);
+  return `<div class="stack">
+    <section class="card"><h2>Shared memory <small>${n0(k.games)} game${k.games === 1 ? "" : "s"} · ${n0(k.battles)} fights recorded${k.updated ? " · updated " + ago(k.updated) : ""}</small></h2>
+      <p class="sub" style="margin-bottom:10px">Everything below was learned from every game on this PC, not just this one. New games start from it and the planners consult it: strength margins, whether peace offers and coalition applications work, which wording gets answered, what things really cost.</p>
+      <div class="row"><div class="what"><b>Use what it has learned</b><div>Off means it plays only on its built-in rules (it still keeps learning).</div></div><label class="switch"><input type="checkbox" data-sw="useKnowledge" ${on ? "checked" : ""}><span class="slider"></span></label></div>
+      <div class="btns" style="margin-top:10px"><button class="preset" id="kb-reset">Forget everything it has learned…</button></div></section>
+    <section class="card"><h2>Fight odds <small>how big a margin actually won, by opponent</small></h2><div class="grid2">${battles("ai", "Computer nations")}${battles("human", "Human players")}</div>
+      <p class="sub" style="margin-top:8px">Each bar is the share of attacks that took the province at that strength ratio (my force against their estimated defence). Green means it wins most of the time. The bot attacks humans only from a margin like this, and softens it where computer opponents have been easy.</p></section>
+    <section class="card"><h2>Victory points by game day <small>this game against what it has seen before</small></h2>${paceChart(k)}</section>
+    <div class="grid2">
+      <section class="card"><h2>Diplomacy odds</h2>
+        ${hbar("Computer", k.peace.ai.offered ? k.peace.ai.rate : 0, k.peace.ai.offered ? `${Math.round(k.peace.ai.rate * 100)}% (${k.peace.ai.ok}/${k.peace.ai.offered})` : "no offers yet", k.peace.ai.rate >= 0.5 ? "hi" : "", "Peace offers to computer nations that were accepted")}
+        ${hbar("Humans", k.peace.human.offered ? k.peace.human.rate : 0, k.peace.human.offered ? `${Math.round(k.peace.human.rate * 100)}% (${k.peace.human.ok}/${k.peace.human.offered})` : "no offers yet", k.peace.human.rate >= 0.5 ? "hi" : k.peace.human.offered >= 8 && k.peace.human.rate < 0.2 ? "lo" : "", "Peace offers to human players that were accepted")}
+        <p class="sub" style="margin-top:6px">${k.peace.human.offered >= 8 && k.peace.human.rate < 0.2 ? "Humans rarely accept, so it now waits longer between offers to them." : "Offers are paced from these odds once there is enough history."}</p>
+        <h2 style="margin-top:12px">Coalitions by size</h2>${coal.length ? table(["Size", "Applied", "Joined", "Refused", "Avg wait"], coal, "") : `<div class="empty">No applications recorded yet.</div>`}</section>
+      <section class="card"><h2>Messages <small>${n0(k.texts.total)} wordings tried</small></h2>
+        ${k.texts.best.length ? `<div class="sub" style="margin-bottom:4px"><b>Gets answered</b></div><div class="list">${k.texts.best.map((m) => `<div><span class="main">“${esc(m.text)}”</span><span class="tag ${m.replied ? "ok" : ""}">${m.replied}/${m.sent}</span></div>`).join("")}</div>` : `<div class="empty">No message history yet.</div>`}
+        ${k.texts.worst.length ? `<div class="sub" style="margin:10px 0 4px"><b>Ignored so far</b> (used less now)</div><div class="list">${k.texts.worst.map((m) => `<div><span class="main">“${esc(m.text)}”</span><span class="tag">0/${m.sent}</span></div>`).join("")}</div>` : ""}</section>
+      <section class="card"><h2>Defence</h2>${k.defence.undefended + k.defence.defended ? hbar("Nobody", k.defence.undefendedShare === null ? 0 : k.defence.undefendedShare, `${k.defence.undefended} of ${k.defence.undefended + k.defence.defended} had no defender`, k.defence.undefendedShare > 0.5 ? "lo" : "", "Lost provinces that nobody was defending") + `<p class="sub" style="margin-top:6px">${k.defence.undefendedShare > 0.5 ? "Most lost provinces had nobody defending them: keep armies close to the border." : "Most lost provinces were defended and still fell: the other side simply brought more."}</p>` : `<div class="empty">No province lost yet.</div>`}</section>
+      <section class="card"><h2>Normal prices</h2>${k.prices.length ? `<div class="mini">${k.prices.map((p) => `<span class="tag" title="Slow average of the market price across games">${esc((S.state && S.state.resources[p.rid] && S.state.resources[p.rid].name) || "Resource " + p.rid)}: ${n1(p.fair)}</span>`).join("")}</div><p class="sub" style="margin-top:8px">It will not pay far above these.</p>` : `<div class="empty">Collecting prices (needs a few hours).</div>`}
+      ${k.params ? `<h2 style="margin-top:12px">Settled risk margins <small>from earlier games, used to start new ones</small></h2><div class="mini">${Object.entries(k.params.attackRatio || {}).map(([m, v]) => `<span class="tag">${esc(m)}: ${n1(v)}×</span>`).join("")}</div>` : ""}</section>
+    </div>
+    <section class="card"><h2>Best units across all games <small>${n0(k.units.length)} types tracked</small></h2>${k.units.length ? table(["Unit", "Type", "Fielded", "Kills", "Lost", "K/D", "Avg life"], unitRows(k.units.map((u) => ({ ...u, cls: "" })), true), "") : `<div class="empty">Appears once units have fought.</div>`}</section>
+    <section class="card"><h2>Lessons <small>most repeated first</small></h2>${k.lessons.length ? `<div class="list">${k.lessons.map((l) => `<div><span class="main">${esc(l.text)}</span><span class="tag">${l.n}×</span></div>`).join("")}</div>` : `<div class="empty">No lessons yet. They appear after the first lost province.</div>`}</section></div>`;
+}
+document.addEventListener("click", (e) => { if (e.target.closest("#kb-reset") && confirm("Forget everything learned from every game? Fight odds, peace and coalition odds, wording and prices start over. Games in progress are not affected.")) post("/api/knowledge/reset", {}).then(() => { kbAt = 0; KBD = null; toast("Learning reset"); render(); }); });
+
+const VIEWS = { home: viewHome, military: viewMilitary, economy: viewEconomy, diplomacy: viewDiplomacy, players: viewPlayers, stats: viewStats, brain: viewBrain, activity: viewActivity, settings: viewSettings };
 function renderGameSelect() {
   const sel = $("game"); const games = S.games || [];
   const sig = JSON.stringify(games.map((g) => [g.id, g.nation, g.day, g.vp])) + (S.gameId || "");
@@ -666,6 +845,7 @@ function render() {
     return;
   }
   if (tab === "home" && hovering) return; // do not rebuild the charts under the pointer
+  if (tab === "players") { const box = document.querySelector("[data-plmsg]"); if (box && (box.value || box === document.activeElement)) return; if (document.activeElement && document.activeElement.id === "pl-q") return; }
   if (tab === "diplomacy") { // never wipe a half-typed reply when new data arrives
     const typing = [...document.querySelectorAll("[data-reply-box]")].some((b) => b.value || b === document.activeElement);
     if (typing) return;

@@ -4,7 +4,7 @@
 // Pure functions: the runner records attacks, calls these, applies the patch and logs the notes.
 import { R, type GameState, type Mode, type Settings } from "./types.js";
 
-export interface AttackRecord { t: number; target: number; mode: Mode; ids: (string | number)[]; units: number }
+export interface AttackRecord { t: number; target: number; mode: Mode; ids: (string | number)[]; units: number; ratio?: number; human?: boolean }
 export type AttackResult = { rec: AttackRecord; result: "success" | "failure" };
 
 const EVAL_AFTER_MS = 20 * 60_000;

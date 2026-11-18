@@ -1,5 +1,6 @@
 // Strategy brain: pure functions. (state, settings, options, memory) -> Decision[]
 // No I/O here so every decision is explainable on the dashboard and testable offline.
+import { kb, type TargetKind } from "./knowledge.js";
 import { unitRangeKm } from "./rules.js";
 import { learnedDefence, weaknessMultiplier, type PlayerIntel } from "./intel.js";
 import { compose, isGreeting, remember, type MsgKind } from "./messages.js";
@@ -24,7 +25,7 @@ export type Shortfall = Record<string, number>;
 export interface Waiting { label: string; lacks: Record<string, number> }
 const WAITING = new WeakMap<object, Waiting[]>();
 export const waitingOf = (sink: object | undefined): Waiting[] => (sink ? WAITING.get(sink) ?? [] : []);
-const noteShort = (sink: Shortfall | undefined, b: Budget, c: Record<string, number>, reserve: Record<string, number>, includeMoney = true, label?: string) => {
+export const noteShort = (sink: Shortfall | undefined, b: Budget, c: Record<string, number>, reserve: Record<string, number>, includeMoney = true, label?: string) => {
   if (!sink) return;
   const lacks: Record<string, number> = {};
   for (const [k, v] of Object.entries(c)) {
@@ -121,8 +122,9 @@ export function frontierDistance(s: GameState): Map<number, number> {
   return d;
 }
 
-export function planBuilds(s: GameState, st: Settings, options: Map<number, ProvOptions>, budget: Budget, blocked: Record<string, number> = {}, short?: Shortfall, lab?: LabHint): Decision[] {
+export function planBuilds(s: GameState, st: Settings, options: Map<number, ProvOptions>, budget: Budget, blocked: Record<string, number> = {}, short?: Shortfall, lab?: LabHint, opts: { only?: RegExp; reserve?: Record<string, number>; skip?: Set<number> } = {}): Decision[] {
   const out: Decision[] = [];
+  const reserve = opts.reserve ?? st.reserve; // a different cushion when the caller is in a hurry (no way to train ground units)
   const fd = frontierDistance(s);
   const airBases = s.provinces.filter((p) => p.have?.some((i) => AIR_BASE_IDS.has(i))).length;
   const navalBases = s.provinces.filter((p) => p.have?.some((i) => NAVAL_BASE_IDS.has(i))).length;
@@ -131,13 +133,14 @@ export function planBuilds(s: GameState, st: Settings, options: Map<number, Prov
   const cand: { p: Prov; u: UpgradeOpt; score: number }[] = [];
 
   for (const p of s.provinces) {
-    if (!p.freeSlot) continue;
+    if (!p.freeSlot || opts.skip?.has(p.id)) continue;
     if ((blocked["prov:" + p.id] ?? 0) > Date.now()) continue; // just (re)captured: contested, and the server often ignores builds there
     const opt = options.get(p.id);
     if (!opt) continue;
     const near = fd.get(p.id) ?? 9;
     for (const u of opt.upgrades) {
       if (SKIP_BUILD.test(u.name)) continue;
+      if (opts.only && !opts.only.test(u.name)) continue;
       if (Object.keys(u.costs).length === 0) continue; // an upgrade with no cost data cannot be queued (accepted by the server, never started)
       if (p.have?.includes(u.id)) continue; // already built: ordering it again is a silent no-op
       if ((blocked["build:" + p.id + ":" + u.id] ?? 0) > Date.now()) continue;
@@ -168,7 +171,7 @@ export function planBuilds(s: GameState, st: Settings, options: Map<number, Prov
   for (const c of cand) {
     if (n >= 6) break;
     if (used.has(c.p.id)) continue;
-    if (!fits(budget, c.u.costs, st.reserve)) { if (noted++ < 3) noteShort(short, budget, c.u.costs, st.reserve, false, `Build ${c.u.name} in ${c.p.name}`); continue; }
+    if (!fits(budget, c.u.costs, reserve)) { if (noted++ < 3) noteShort(short, budget, c.u.costs, reserve, false, `Build ${c.u.name} in ${c.p.name}`); continue; }
     spend(budget, c.u.costs);
     used.add(c.p.id);
     n++;
@@ -239,7 +242,7 @@ export function planMobilize(s: GameState, st: Settings, options: Map<number, Pr
         .filter((u) => (blocked["mobilize:" + p.id + ":" + u.id] ?? 0) <= Date.now())
         .filter((u) => (emergency && (role === "air" || role === "sea")) ? false : fits(budget, u.costs, role === "air" || role === "sea" ? richReserve : baseReserve))
         .filter((u) => Object.entries(u.daily).every(([k, v]) => net(k) - v / 24 > -Math.abs(net(k)) * 0.5 - 15 || k === R.FUEL))
-        .sort((a, b) => sumCost(b.costs) - sumCost(a.costs)); // best affordable tier
+        .sort((a, b) => sumCost(b.costs) * (st.useKnowledge ? kb.unitFactor(b.name) : 1) - sumCost(a.costs) * (st.useKnowledge ? kb.unitFactor(a.name) : 1)); // best affordable tier, nudged by what each unit has really achieved
       if (cands.length) { picked = { u: cands[0], role }; break; }
     }
     if (!picked) {
@@ -348,7 +351,10 @@ export function planMilitary(s: GameState, st: Settings, mem: Memory, exclude: S
     let str = 0;
     // an owner that has been idle for hours gets a slightly lower margin (it will not reinforce); the tuner still corrects failures
     const ii = intel[t.prov.owner];
-    const need = ratio * t.estDef * (ii?.inactiveHours != null && ii.inactiveHours >= 12 ? 0.85 : 1);
+    const ownerP = s.players.find((p) => p.id === t.prov.owner);
+    const kind: TargetKind = ownerP && ownerP.human ? "human" : "ai";
+    const learned = st.useKnowledge ? kb.ratioFactor(kind) : 1; // humans (or AI) have beaten the average margin more or less often in past games
+    const need = ratio * learned * t.estDef * (ii?.inactiveHours != null && ii.inactiveHours >= 12 ? 0.85 : 1);
     for (const a of sorted) { group.push(a); str += a.str; if (str >= need) break; }
     if (str < need) {
       out.push({ kind: "move", args: [], label: `Hold: ${t.prov.name} needs strength ${need.toFixed(1)} (have ${str.toFixed(1)})`, reason: "insufficient force" + (ii && ii.weakness > 0.8 ? ` (weak owner: ${ii.why.slice(0, 2).join(", ")})` : ""), cost: {} });
@@ -374,7 +380,7 @@ export function planMilitary(s: GameState, st: Settings, mem: Memory, exclude: S
           continue;
         }
       }
-      out.push({ kind: "move", args: [a.id, t.prov.x, t.prov.y], label: `Attack ${t.prov.name} with ${a.name || a.id} (str ${a.str.toFixed(1)})`, reason: `force ${str.toFixed(1)} vs est. defence ${t.estDef.toFixed(1)}, VP ${t.prov.vp}` + (ii && ii.weakness > 0.8 ? `; weak owner: ${ii.why.slice(0, 2).join(", ")}` : ""), cost: {}, meta: { target: t.prov.id } });
+      out.push({ kind: "move", args: [a.id, t.prov.x, t.prov.y], label: `Attack ${t.prov.name} with ${a.name || a.id} (str ${a.str.toFixed(1)})`, reason: `force ${str.toFixed(1)} vs est. defence ${t.estDef.toFixed(1)}, VP ${t.prov.vp}` + (ii && ii.weakness > 0.8 ? `; weak owner: ${ii.why.slice(0, 2).join(", ")}` : ""), cost: {}, meta: { target: t.prov.id, ratio: str / Math.max(0.5, t.estDef), human: kind === "human" } });
     }
     if (backedOff) out.push({ kind: "move", args: [], label: `Hold: orders against ${t.prov.name} are not taking effect`, reason: "declared war and retried; backing off for 2h on the armies that still do not move", cost: {} });
     free = free.filter((a) => !group.includes(a));
@@ -541,6 +547,15 @@ export function planCampaign(s: GameState, st: Settings, mem: Memory): Decision[
 export function planDiplomacy(s: GameState, st: Settings, mem: Memory): Decision[] {
   const out: Decision[] = [];
   const now = Date.now();
+  // Peace offered to me: someone whose own stance toward me is already peace (or better) while mine is still war. Accept it, unless I am deliberately at war with them.
+  for (const p of s.players) {
+    if (p.id === s.me.id || p.id === 0 || !p.nation || /insurg/i.test(p.nation)) continue;
+    const theirs = p.relBack ?? -2, mine = p.rel ?? -2;
+    if (theirs < 1 || mine >= 1 || theirs === 99) continue;
+    if (st.campaign.then.includes(p.id) || st.targetPlayers.includes(p.id)) continue; // I chose to fight them
+    if ((mem.lastPeaceOffer[p.id] ?? 0) > now - 3 * 3600_000) continue; // already answered recently
+    out.push({ kind: "relation", args: [p.id, Math.min(theirs, 2)], label: `Accept peace from ${p.nation} (${p.name})`, reason: `${p.nation} has offered peace: accepting stops the fighting`, cost: {} });
+  }
   const targetOwners = new Set(findTargets(s, st, mem).map((t) => t.prov.owner));
   const neighbours = new Set(s.frontier.map((f) => f.owner));
   let n = 0;
@@ -552,7 +567,8 @@ export function planDiplomacy(s: GameState, st: Settings, mem: Memory): Decision
       if (asked.has(oid)) continue;
       const p = s.players.find((x) => x.id === oid);
       if (!p || p.id === s.me.id || p.id === 0 || /insurg/i.test(p.nation) || isTeamOrAlly(s, p.id)) continue;
-      if ((p.rel ?? -2) >= 1 || (mem.lastPeaceOffer[oid] ?? 0) > now - 6 * 3600_000) continue;
+      const gap = st.useKnowledge ? kb.peaceGapFactor(p.human ? "human" : "ai") : 1;
+      if ((p.rel ?? -2) >= 1 || (mem.lastPeaceOffer[oid] ?? 0) > now - 6 * 3600_000 * gap) continue;
       out.push({ kind: "relation", args: [oid, 1], label: `Offer peace to ${p.nation} (${p.name}) - outgunned near ${th.name}`, reason: `their stack ${th.threat.toFixed(1)} vs my defence ${th.defence.toFixed(1)} at ${th.name}`, cost: {} });
       if (p.human && (mem.lastMessaged[oid] ?? 0) < now - 12 * 3600_000) {
         const text = compose("peace_threat", oid, mem);
@@ -569,7 +585,7 @@ export function planDiplomacy(s: GameState, st: Settings, mem: Memory): Decision
     if (asked.has(oid) || r.lossesTo < 2 || now - r.lastLoss > 12 * 3600_000 || r.stack < 8) continue;
     const p = s.players.find((x) => x.id === oid);
     if (!p || !p.human || p.id === s.me.id || isTeamOrAlly(s, oid)) continue;
-    if ((p.rel ?? -2) >= 1 || (mem.lastPeaceOffer[oid] ?? 0) > now - 8 * 3600_000) continue;
+    if ((p.rel ?? -2) >= 1 || (mem.lastPeaceOffer[oid] ?? 0) > now - 8 * 3600_000 * (st.useKnowledge ? kb.peaceGapFactor("human") : 1)) continue;
     const text = compose((mem.sentTexts[String(oid)] ?? []).length >= 1 ? "negotiate_again" : "negotiate", oid, mem) ?? compose("negotiate_again", oid, mem);
     out.push({ kind: "relation", args: [oid, 1], label: `Offer peace to ${p.nation} (${p.name}) - losing to them`, reason: `they took ${r.lossesTo} of my provinces (biggest stack ${r.stack.toFixed(0)}); stop provoking, negotiate`, cost: {} });
     if (text && (mem.lastMessaged[oid] ?? 0) < now - 6 * 3600_000) { remember(mem, oid, text); out.push({ kind: "message", args: [oid, text], label: `Message ${p.nation} to negotiate peace`, reason: "losing to them: own the war and offer to stop", cost: {} }); }
@@ -660,7 +676,7 @@ export interface MarketOrder { id: number; buy: boolean; amount: number; limit: 
 export interface MarketInfo { prices: Record<string, { price: number; min: number; max: number }>; asks: MarketOrder[]; bids: MarketOrder[]; mine: MarketOrder[] }
 
 /** Keep scarce inputs stocked by buying with surplus money. One standing bid per resource; stale bids are cancelled and re-priced. */
-export function planMarket(s: GameState, st: Settings, m: MarketInfo, mem: Memory, budget: Budget, short?: Shortfall): Decision[] {
+export function planMarket(s: GameState, st: Settings, m: MarketInfo, mem: Memory, budget: Budget, short?: Shortfall, focus = false): Decision[] {
   const out: Decision[] = [];
   const now = Date.now();
   const mk = st.market;
@@ -691,7 +707,11 @@ export function planMarket(s: GameState, st: Settings, m: MarketInfo, mem: Memor
 
     // 2. BUY what is blocking a wanted build / research / unit, plus hard floors on scarce inputs.
     const blockedBy = lacks[rid] ?? 0;
-    const buyOff = (mem.blocked["market:buy:" + rid] ?? 0) > now, sellOff = (mem.blocked["market:sell:" + rid] ?? 0) > now; // the server refused my last such order
+    // war footing: buy only what the top-priority order (the units) is missing, not inputs for research or later builds
+    const wait0 = focus ? waitingOf(short)[0] : undefined;
+    // ... and only when that order is training units (or the building that unlocks training): never a hospital or research while the army is short
+    const notNeededNow = focus && (wait0 === undefined || !/^(Train |Build (Army Base|Recruiting Office))/i.test(wait0.label) || !((wait0.lacks[rid] ?? 0) > 0));
+    const buyOff = notNeededNow || (mem.blocked["market:buy:" + rid] ?? 0) > now, sellOff = (mem.blocked["market:sell:" + rid] ?? 0) > now; // the server refused my last such order
     const floor = mk.stock[rid] ?? 0;
     // Size the order for the first (highest priority) waiting item that lacks this resource, not for the biggest shortfall of everything waiting:
     // a build that lacks 44 Supplies must not be held up by a 1,000-Supplies research bid at a poor price (one standing order per resource).
@@ -706,8 +726,10 @@ export function planMarket(s: GameState, st: Settings, m: MarketInfo, mem: Memor
       const asks = m.asks.filter((o) => String(o.res) === rid && Math.ceil(o.limit) <= cap && o.player !== s.me.id).sort((a, c) => a.limit - c.limit);
       // a limit outside the resource's allowed price band is refused by the server
       const limit = Math.max(Math.ceil(info.min), Math.min(cap, asks.length ? Math.ceil(asks[0].limit) : Math.ceil(Math.max(info.min, info.price)) + (mem.bidBump[rid] ?? 0)));
-      // never panic-buy: above 2.5x the resource's floor price the buying itself is what drives the price up, and the money is needed for defenders
-      const amount = limit > Math.min(info.max, cap) || limit > Math.floor(info.min * 2.5) ? 0 : Math.floor(Math.min(wantBuy, spendLeft / limit));
+      // never panic-buy: far above the floor price the buying itself drives the price up. The ceiling is 2.5x the floor but never below 1.3x today's quote (cheap resources with a low floor would otherwise be unbuyable once their price doubles).
+      const fair = st.useKnowledge ? kb.fairPrice(rid) : null; // what this has really cost over many hours and games
+      const tooDear = fair !== null && limit > Math.max(info.min * 1.2, fair * 2); // only a runaway price (twice what it normally costs) is refused; ordinary bid escalation is not
+      const amount = limit > Math.min(info.max, cap) || limit > Math.max(Math.floor(info.min * 2.5), Math.ceil(info.price * 1.3)) || tooDear ? 0 : Math.floor(Math.min(wantBuy, spendLeft / limit));
       if (amount >= 20) {
         spendLeft -= amount * limit;
         budget[R.MONEY] = (budget[R.MONEY] ?? 0) - amount * limit;
@@ -752,7 +774,7 @@ export function planCoalition(s: GameState, st: Settings, co: CoalitionInfo, mem
   if (pending) {
     const age = now - (mem.coalitionTried[String(pending.id)] ?? now);
     // A coalition whose member answered kindly beats one that has been silent: switch (one application at a time).
-    const usable = (c: { id: number }) => (mem.blocked["coalition:" + c.id] ?? 0) < now; // the server refused my last application to it: do not give up a working one for it
+    const usable = (c: { id: number }) => (mem.blocked["coalition:" + c.id] ?? 0) < now && !mem.blocked["coalitionN:" + c.id]; // the server has refused me before: never give up a working application for it
     const invite = co.list.find((c) => c.id !== pending.id && invited(c) && !c.pending && usable(c));
     if (invite && !invited(pending) && age > 30 * 60_000) return [{ kind: "coalition_withdraw", args: [pending.id], label: `Withdraw application to ${pending.name}`, reason: `${invite.name} invited me to join; taking the invitation instead of waiting`, cost: {} }];
     const lead = co.list.find((c) => c.id !== pending.id && usable(c) && warm(c) && now - (mem.coalitionTried[String(c.id)] ?? 0) > 72 * 3600_000);
@@ -773,7 +795,7 @@ export function planCoalition(s: GameState, st: Settings, co: CoalitionInfo, mem
       const hostile = members.some((p) => warred.has(p.id) || p.rel === -2);
       const borders = members.filter((p) => frontierOwners.has(p.id)).length;
       const progress = (c.score + s.me.vps) / Math.max(1, c.req);
-      return { c, hostile: hostile && !invited(c), score: progress * (1 - 0.2 * borders) * (c.members >= 3 ? 1.1 : 1) * (warm(c) ? 3 : 1) * (invited(c) ? 10 : 1) };
+      return { c, hostile: hostile && !invited(c), score: progress * (1 - 0.2 * borders) * (c.members >= 3 ? 1.1 : 1) * (warm(c) ? 3 : 1) * (invited(c) ? 10 : 1) * (st.useKnowledge ? kb.coalitionFactor(c.members) : 1) };
     })
     .filter((x) => !x.hostile)
     .sort((a, b) => b.score - a.score);

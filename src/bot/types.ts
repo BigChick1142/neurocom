@@ -47,6 +47,8 @@ export interface Settings {
   targetPlayers: number[];            // prefer attacking these (if policy allows)
   /** An ordered plan: take the named province, then make peace with some players, then go for another player's cities. Empty = no campaign. */
   campaign: { first: string; peaceWith: number[]; then: number[]; cities: boolean };
+  /** Consult what was learned in every game on this PC (data/knowledge.json): strength margins, peace and coalition odds, wording, prices. */
+  useKnowledge: boolean;
   messageLimitPerHour: number;
   market: {
     stock: Record<string, number>; maxSpendPct: number; maxPriceMult: number; staleHours: number;
@@ -64,14 +66,18 @@ export interface Decision {
   label: string;         // human readable one-liner
   reason: string;        // why
   cost?: Record<string, number>; // resources this will consume (for budgeting)
-  meta?: { target?: number; player?: number; resource?: number; incoming?: string; side?: "buy" | "sell"; role?: string; aim?: number };
+  meta?: { target?: number; player?: number; resource?: number; incoming?: string; side?: "buy" | "sell"; role?: string; aim?: number; ratio?: number; human?: boolean };
 }
 
 export type UnitClass = "land" | "air" | "sea";
 /** Learning ledger: per unit class, how much capital I tied up (cost x hours) and what it returned. */
+/** What one kind of unit has done for me: how many I fielded, kills it scored, how many were lost, hours alive, unit value. */
+export interface UnitStat { fielded: number; kills: number; lost: number; hours: number; cost: number; cls: UnitClass }
 export interface LabMemory {
   classes: Record<UnitClass, { capitalHours: number; kills: number; lost: number; sorties: number; refused: number }>;
-  seen: Record<string, { cls: UnitClass; k: number; cost: number; t: number }>; // unitUID -> last observation
+  seen: Record<string, { cls: UnitClass; k: number; cost: number; t: number; n?: string }>; // unitUID -> last observation
+  byType?: Record<string, UnitStat>;       // unit type name -> what it achieved for me in this game
+  attacks?: { won: number; failed: number }; // attack orders judged so far
   lastT: number;
   discovered: string[];                    // unit type names I have owned at least once
 }
@@ -93,7 +99,7 @@ export interface Memory {
   seenInbox: number[];                     // message uids already handled
   sentMessagesLog: number[];               // timestamps (rate limit)
   orderPlacedAt: Record<string, number>;
-  attacks: { t: number; target: number; mode: Mode; ids: (string | number)[]; units: number }[]; // attacks awaiting a verdict (for the tuner)
+  attacks: { t: number; target: number; mode: Mode; ids: (string | number)[]; units: number; ratio?: number; human?: boolean }[]; // attacks awaiting a verdict (for the tuner)
   lastTune: number;
   assigned: Record<string, { target: number; t: number }>; // armies the bot has sent somewhere (left alone while marching)
   blocked: Record<string, number>;         // action key -> blocked until ts (repeated no-ops)
@@ -108,6 +114,9 @@ export interface Memory {
   truce: Record<string, number>;           // owner id -> ts until which I stand down against them (I asked for peace while outgunned)
   moveTries: Record<string, { target: number; t: number; n: number; declared: boolean }>; // army id -> last attack order and whether it took effect
   coalitionInvite: Record<string, number>; // coalition id -> when one of its members invited me to join
+  lastSent: Record<string, { text: string; t: number; replied: boolean }>; // player id -> my last message to them (did it get answered?)
+  peaceOpen: Record<string, { t: number; kind: "ai" | "human" }>; // peace offers still waiting for an answer
+  coalitionOpen: { id: number; size: number; t: number } | null; // my current coalition application (did it succeed?)
   coalitionWarm: Record<string, number>;   // coalition id -> when one of its members answered my message without hostility
   coalitionTried: Record<string, number>;  // coalition id -> when I last applied (so I never spam one)
   bidBump: Record<string, number>;         // resource id -> price escalation after stale bids   // resource id -> ts of our last bid

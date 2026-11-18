@@ -33,7 +33,7 @@ dashboard shows everything and lets you steer.
 
 <p align="center"><img src="docs/img/dashboard-discord.png" alt="Discord setup card: paste a bot token, pick a server and channel" width="92%"></p>
 
-The **Stats** tab shows what the bot has actually done: victory points per hour, provinces won and lost (and to whom), a 24-hour activity chart, market volume, diplomacy counts and reliability numbers. Hover any chart for the exact numbers at that moment. Everything the bot decides is explained in plain English, and anything it will not guess at (a question from another player) is left for you.
+The **Stats** tab shows what the bot has actually done, including a combat record (kills against units lost, how many attacks worked, and every unit type ranked by how much it has helped): victory points per hour, provinces won and lost (and to whom), a 24-hour activity chart, market volume, diplomacy counts and reliability numbers. Hover any chart for the exact numbers at that moment. Everything the bot decides is explained in plain English, and anything it will not guess at (a question from another player) is left for you.
 
 ## Quick start (Windows)
 
@@ -44,6 +44,12 @@ The **Stats** tab shows what the bot has actually done: victory points per hour,
 5. **`Stop Neurocom.cmd`** stops it. Use the dashboard's **Pause bot** button to keep it connected but idle.
 
 Optional: set the environment variable `CON_BROWSER_CHANNEL=chrome` (or `msedge`) to use the browser already installed instead of Playwright's Chromium (note: a different browser needs a fresh login).
+
+## It learns across games
+
+Per-game memory is about one game; `data/knowledge.json` (local, never committed) is about the game in general and is shared by every game the bot plays on the PC. It records how big a strength margin actually wins fights (separately for computer and human opponents), how often peace offers and coalition applications succeed (by coalition size), which message wordings get answered, what resources normally cost, how fast a game normally grows by day, which lessons keep repeating, and how each unit type performs (kills, losses, time alive; training leans toward the types that earn their keep). New games start from the margins earlier games settled on, and the planners consult it: attack margins, how often to offer peace, which coalitions to prefer, which wording to send, and a ceiling on market prices. The **Brain** tab shows all of it, with a switch to turn the use of it off and a button to forget it. `tools/learn-from-logs.ts` seeds it once from logs already on the PC.
+
+The **Players** tab lists everyone in the game: filter, sort, click a player to see their border provinces and how weak they look, then offer peace, message them, protect or target them, or add them to the campaign. The Home tab has a **Path to victory** card (pace, ETA, coalition progress, best next conquests with a one-click "take this next").
 
 ## Campaign: tell it the plan
 
@@ -57,7 +63,7 @@ Set it up from the dashboard: **Settings → Discord**. You only paste the bot t
 2. Paste the token in the Discord card and press **Check token**. Neurocom finds the bot's application id by itself, offers an **invite link** (if the bot is not in your server yet), lists your servers and channels in dropdowns, and fills in your user id (the owner of the bot app).
 3. Press **Save and connect**. A message arrives in Discord within seconds. Use **Send a test message** any time.
 
-You get alerts (province lost or captured, capital threatened, messages needing you, errors) in the channel you picked, or in your direct messages if you pick none, plus owner-only slash commands `/status`, `/report`, `/pause`, `/resume`, `/reply`, `/games`. Your token is stored only in the `.env` file on your computer (it is in `.gitignore`) and is sent only to Discord; **never share or commit it**, and reset it in the Developer Portal if it ever leaks. (Prefer files? Copy `.env.example` to `.env` and fill it in; the dashboard and the file stay in sync.)
+You get alerts (province lost or captured, capital threatened, messages needing you, errors) in the channel you picked, or in your direct messages if you pick none, plus owner-only slash commands: `/status` (with Map, Dashboard, Progress and Pause or Resume buttons), `/map` and `/dashboard` (screenshots of the game map and of any dashboard page), `/report`, `/pause`, `/resume`, `/reply`, `/games`. The `game` option is a pick list of nations, and it is filled in for you when only one game is still alive. Your token is stored only in the `.env` file on your computer (it is in `.gitignore`) and is sent only to Discord; **never share or commit it**, and reset it in the Developer Portal if it ever leaks. (Prefer files? Copy `.env.example` to `.env` and fill it in; the dashboard and the file stay in sync.)
 
 ## Playing several games
 
@@ -97,7 +103,7 @@ State is saved in `data/`: `settings.json`, `memory.json` (so restarts don't re-
 | Command | What |
 |---------|------|
 | `npm start` | Bot + dashboard (http://127.0.0.1:8787) |
-| `npm test` | 63 offline scenario tests of the planners (synthetic game states) |
+| `npm test` | 70 offline scenario tests of the planners (synthetic game states) |
 | `npm run typecheck` | TypeScript check |
 | `npm run report` | Progress / action / refusal summary from `data/*.jsonl` |
 | `npm run ev "<js>"` | Evaluate JS inside the live game page |

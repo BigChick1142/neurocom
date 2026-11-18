@@ -16,6 +16,15 @@ export class GameManager extends EventEmitter {
   private timer: NodeJS.Timeout | null = null;
 
   get(id: string | null | undefined): Bot | undefined { return id ? this.bots.get(id) : undefined; }
+
+  /** A PNG of the game's own browser tab (the map as the game shows it). Null when that tab is not open. */
+  async gameShot(id: string): Promise<Buffer | null> {
+    for (const [page, gid] of this.byPage) {
+      if (gid !== id || page.isClosed()) continue;
+      return await page.screenshot({ type: "png", timeout: 20_000 });
+    }
+    return null;
+  }
   first(): Bot | undefined { return this.bots.values().next().value; }
 
   list(): GameInfo[] {

@@ -1,0 +1,21 @@
+// Read-only UI check: open the Players tab, select a row, open the Brain tab and Home, screenshot. No settings are changed.
+import { chromium } from "playwright";
+const b = await chromium.launch();
+const p = await b.newPage({ viewport: { width: 1300, height: 900 } });
+const errs: string[] = [];
+p.on("pageerror", (e) => errs.push(String(e)));
+await p.goto("http://127.0.0.1:8787");
+await p.waitForTimeout(2500);
+await p.click("[data-tab=players]");
+await p.click("[data-plf=border]");
+await p.waitForSelector("tr[data-plsel]");
+await p.click("tr[data-plsel]");
+await p.waitForSelector("#pl-detail");
+await p.screenshot({ path: "captures/shots/players-selected.png", fullPage: true });
+await p.fill("#pl-q", "zzzz");
+const none = await p.$eval("#pl-f", () => document.querySelector(".empty")?.textContent ?? "");
+await p.click("[data-tab=home]");
+await p.waitForTimeout(500);
+await p.screenshot({ path: "captures/shots/home-win.png", fullPage: true });
+console.log("filtered-empty:", none.slice(0, 40), "| errors:", JSON.stringify(errs));
+await b.close();

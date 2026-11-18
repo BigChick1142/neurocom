@@ -1,11 +1,14 @@
 // Offline tests for the brain with synthetic game states: npx tsx tools/sim.ts
 import assert from "node:assert/strict";
+import { Knowledge, kb } from "../src/bot/knowledge.js";
+import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { computeStats } from "../src/dashboard/stats.js";
-import { assessThreats, chooseMode, planBuilds, planDefense, planDiplomacy, planCoalition, planAirSea, planTruceHalts, planRally, waitingOf, capitalInDanger, roleOf, findTargets, planCampaign, campaignStep, planMarket, planMessages, planMilitary, planMobilize, planResearch, type MarketInfo, type ProvOptions } from "../src/bot/brain.js";
+import { noteShort, assessThreats, chooseMode, planBuilds, planDefense, planDiplomacy, planCoalition, planAirSea, planTruceHalts, planRally, waitingOf, capitalInDanger, roleOf, findTargets, planCampaign, campaignStep, planMarket, planMessages, planMilitary, planMobilize, planResearch, type MarketInfo, type ProvOptions } from "../src/bot/brain.js";
 import { evaluateAttacks, tuneFromAttacks, tuneUnitCap } from "../src/bot/tuner.js";
 import { DEFAULT_SETTINGS } from "../src/bot/settings.js";
 import { freshLab, type Army, type GameState, type Memory, type Prov, type Settings } from "../src/bot/types.js";
-import { classScore, labPlan, trackLab } from "../src/bot/lab.js";
+import { classScore, combatSummary, labPlan, trackLab } from "../src/bot/lab.js";
 import { compose, isGreeting, remember } from "../src/bot/messages.js";
 import { narrate, type NarrativeInput } from "../src/dashboard/narrative.js";
 import { gameIdFromUrl, migrateLegacy, defaultGameDir } from "../src/bot/games.js";
@@ -28,7 +31,7 @@ wf(pj(FIXTURE, "researchTypes.json"), JSON.stringify({}));
 setRulesDir(FIXTURE);
 import { buildIntel, learnedDefence, lossLesson, trackActivity, updateEnemyRecords, weaknessMultiplier, type RawIntel } from "../src/bot/intel.js";
 
-const mem = (): Memory => ({ campaign: { key: "", startedAt: 0, firstDone: false, peaceAt: 0 }, coalitionInvite: {}, lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, moveTries: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() });
+const mem = (): Memory => ({ campaign: { key: "", startedAt: 0, firstDone: false, peaceAt: 0 }, coalitionInvite: {}, lastSent: {}, peaceOpen: {}, coalitionOpen: null, lastMessaged: {}, lastPeaceOffer: {}, warDeclaredAt: {}, capturedAt: {}, ownedLast: [], seenInbox: [], sentMessagesLog: [], failedTargets: {}, orderPlacedAt: {}, bidBump: {}, attacks: [], lastTune: 0, assigned: {}, blocked: {}, noEffect: {}, coalitionTried: {}, coalitionWarm: {}, truce: {}, moveTries: {}, needsHuman: [], sentTexts: {}, lastReplyAt: {}, enemy: {}, lessons: [], activity: {}, lab: freshLab() });
 const settings = (o: Partial<Settings> = {}): Settings => ({ ...structuredClone(DEFAULT_SETTINGS), ...o });
 const prov = (id: number, o: Partial<Prov> = {}): Prov => ({ id, name: "P" + id, owner: 92, city: false, vp: 1, x: id * 10, y: 0, morale: 70, adj: [], ...o });
 const army = (id: number, o: Partial<Army> = {}): Army => ({ id, owner: 92, loc: 1, x: 0, y: 0, size: 3, moving: false, fight: 0, units: [{ t: 1, h: 1, k: 0, n: "Motorized Infantry" }], air: false, sea: false, removed: false, str: 10, def: 10, hp: 40, maxhp: 40, name: "A" + id, ...o });
@@ -248,6 +251,8 @@ ok("coalition: a pending application is not swapped for a coalition whose applic
   assert.equal(planCoalition(s, settings(), co, m)[0]?.kind, "coalition_withdraw", "baseline: the warm lead wins");
   m.blocked["coalition:12"] = Date.now() + 3600_000;
   assert.equal(planCoalition(s, settings(), co, m).length, 0, "refused lead is not chased");
+  m.blocked["coalition:12"] = 0; m.blocked["coalitionN:12"] = 1; // the wait has run out, but it has refused me before
+  assert.equal(planCoalition(s, settings(), co, m).length, 0, "still not chased after the wait");
 });
 ok("stats: counts actions, records, market volume and growth from the log and history", () => {
   const now = 1_000_000_000_000, H = 3600_000;
@@ -276,13 +281,125 @@ ok("stats: counts actions, records, market volume and growth from the log and hi
   assert.equal(st.perHour.length, 24); assert.equal(st.perHour.reduce((a, h) => a + h.gained + h.lost, 0), 2);
   assert.equal(computeStats([], [], now).growth.vpNow, 0, "empty files are fine");
 });
-ok("market: never panic-buys far above the floor price", () => {
+ok("knowledge: battle odds by opponent kind, peace and coalition odds, wording, prices, seeding and persistence", () => {
+  const k = new Knowledge();
+  assert.equal(k.requiredRatio(), null, "no evidence yet");
+  assert.equal(k.ratioFactor("human"), 1);
+  for (let i = 0; i < 8; i++) { k.recordBattle("ai", 1.3, true); k.recordBattle("human", 1.3, false); k.recordBattle("human", 2.2, true); }
+  assert.equal(k.requiredRatio("ai"), 1.2); assert.equal(k.requiredRatio("human"), 2); assert.equal(k.requiredRatio(), 2);
+  assert.equal(k.ratioFactor("ai"), 0.85, "computer opponents are beaten with a smaller margin, within bounds"); assert.equal(k.ratioFactor("human"), 1);
+  for (let i = 0; i < 10; i++) k.recordPeace("human", false);
+  assert.equal(k.peaceGapFactor("human"), 3, "stop pestering players who never accept"); assert.equal(k.peaceGapFactor("ai"), 1);
+  for (let i = 0; i < 4; i++) { k.recordCoalition(5, "applied"); k.recordCoalition(5, "joined", 3); k.recordCoalition(1, "applied"); }
+  assert.ok(k.coalitionFactor(5) > 1 && k.coalitionFactor(1) < 1, "coalitions of the size that took me before rank higher");
+  k.recordSent("a b"); k.recordSent("a b"); k.recordSent("c d"); k.recordReply("c d");
+  assert.ok(k.textScore("c d") > k.textScore("never sent") && k.textScore("never sent") > k.textScore("a b"));
+  for (let i = 0; i < 40; i++) k.recordPrice("4", 10, 1_000_000 + i * 11 * 60_000);
+  assert.ok(Math.abs((k.fairPrice("4") ?? 0) - 10) < 0.01); assert.equal(k.fairPrice("5"), null);
+  assert.equal(k.seedParams(), null);
+  for (let i = 0; i < 3; i++) k.recordParams({ economy: 3, balanced: 1.2, aggressive: 1.25 }, { economy: 14, balanced: 40, aggressive: 80 });
+  assert.deepEqual(k.seedParams()?.attackRatio.balanced, 1.2);
+  k.addLesson("Their stack. Lesson: keep an army near border cities."); k.addLesson("Other. Lesson: keep an army near border cities.");
+  assert.equal(k.summary().lessons[0].n, 2, "the same lesson from different games is counted, not repeated");
+  const file = join(tmpdir(), "neurocom-kb-test-" + process.pid + ".json");
+  k.attach(file); (k as any).dirty = true; k.save();
+  const back = new Knowledge(); back.attach(file);
+  assert.equal(back.requiredRatio("human"), 2, "survives a restart"); rmSync(file, { force: true });
+  k.reset(); assert.equal(k.requiredRatio(), null);
+});
+ok("knowledge: attack orders carry their strength ratio and opponent kind (so results can be learned)", () => {
+  const s = base(); s.players[0].rel = -2;
+  const mv = planMilitary(s, settings({ mode: "balanced" }), mem()).filter((d) => d.kind === "move" && d.args.length)[0];
+  assert.ok(mv.meta && mv.meta.ratio! > 0 && mv.meta.human === true);
+});
+ok("knowledge: wording that was answered is preferred, and a learned price ceiling stops over-paying", () => {
+  kb.reset();
+  const m = mem();
+  const first = compose("reply_peace", 5, m)!;
+  kb.recordSent(first); kb.recordSent(first); kb.recordSent(first);
+  const second = compose("reply_peace", 5, mem())!;
+  assert.notEqual(second, first, "a wording that was sent 3 times and never answered gives way");
+  kb.recordReply(second); kb.recordSent(second);
+  assert.equal(compose("reply_peace", 5, mem()), second, "the answered one comes first");
+  kb.reset();
   const s = base(); s.resources["4"].amount = 100;
   const budget = () => Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));
-  const calm: MarketInfo = { prices: { "4": { price: 12, min: 9, max: 27 } }, asks: [], bids: [], mine: [] };
-  assert.equal(planMarket(s, settings(), calm, mem(), budget()).length, 1, "buys at a normal price");
-  const panic: MarketInfo = { prices: { "4": { price: 22, min: 9, max: 27 } }, asks: [{ id: 9, buy: false, amount: 500, limit: 23, res: 4, player: 5 }], bids: [], mine: [] };
-  assert.equal(planMarket(s, settings(), panic, mem(), budget()).length, 0, "does not buy at 23 when the floor is 9");
+  const market: MarketInfo = { prices: { "4": { price: 20, min: 9, max: 27 } }, asks: [{ id: 9, buy: false, amount: 500, limit: 19, res: 4, player: 5 }], bids: [], mine: [] }; // the quote ran away to twice the normal price
+  assert.equal(planMarket(s, settings(), market, mem(), budget()).length, 1, "no history: buys");
+  for (let i = 0; i < 40; i++) kb.recordPrice("4", 9, 1_000_000 + i * 11 * 60_000);
+  assert.equal(planMarket(s, settings(), market, mem(), budget()).length, 0, "it normally costs 9: 19 is a runaway price");
+  assert.equal(planMarket(s, settings({ useKnowledge: false }), market, mem(), budget()).length, 1, "switch off: ignores what was learned");
+  kb.reset();
+});
+ok("market on war footing: a thin money cushion lets it buy what the units lack, and nothing else", () => {
+  const s = base(); s.resources["20"].amount = 1600; s.resources["1"].amount = 571; s.resources["4"].amount = 100;
+  const budget = () => Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));
+  const market: MarketInfo = { prices: { "1": { price: 6, min: 4, max: 15 }, "4": { price: 10, min: 9, max: 27 } }, asks: [], bids: [], mine: [] };
+  const thin = { ...settings(), reserve: Object.fromEntries(Object.entries(DEFAULT_SETTINGS.reserve).map(([k, v]) => [k, v * 0.15])) };
+  const short: Record<string, number> = {};
+  // the first waiting item (units) lacks supplies; research further down lacks rare materials
+  noteShort(short, budget(), { "1": 950 }, thin.reserve, false, "Train Recon Vehicle in X");
+  noteShort(short, budget(), { "4": 1800 }, thin.reserve, false, "Research Abrams");
+  const calm = planMarket(s, settings(), market, mem(), budget(), short);
+  const urgent = planMarket(s, thin, market, mem(), budget(), short, true);
+  const supplies = (o: ReturnType<typeof planMarket>) => o.filter((d) => d.args[3] === 1).reduce((a, d) => a + Number(d.args[1]), 0);
+  assert.ok(supplies(urgent) > supplies(calm), "more money is available for the units' supplies");
+  assert.ok(!urgent.some((d) => d.args[3] === 4), "no rare materials for research while the army is short");
+  // when the top waiting item is not units (a hospital, say), the war-footing market buys nothing at all
+  const short2: Record<string, number> = {};
+  noteShort(short2, budget(), { "1": 900 }, thin.reserve, false, "Build Field Hospital in X");
+  assert.equal(planMarket(s, thin, market, mem(), budget(), short2, true).length, 0, "no supplies for a field hospital while the army is short");
+});
+ok("combat tracking: per unit type fielded / kills / lost / hours, kill-death record, ranking, and the cross-game store", () => {
+  const lab = freshLab(); const k = new Knowledge();
+  const s = base(); const A = (id: number, n: string, kills: number) => ({ id, name: "U" + id, units: [{ t: 1, h: 10, k: kills, n, id }] });
+  const arm = (id: number, n: string, kills: number) => army(id, { units: [{ t: 1, h: 10, k: kills, n, id: id * 10 } as any] });
+  s.armies = [arm(1, "Tank", 0), arm(2, "Infantry", 0)];
+  const sink = (kind: any, n: string, a: number, c: number) => k.recordUnit(kind, n, a, c);
+  const t0 = 1_000_000_000_000;
+  trackLab(s, lab, t0, sink);
+  s.armies = [arm(1, "Tank", 3), arm(2, "Infantry", 0)];
+  trackLab(s, lab, t0 + 20 * 60_000, sink);              // the tank scored 3 kills
+  s.armies = [arm(1, "Tank", 3)];
+  trackLab(s, lab, t0 + 40 * 60_000, sink);              // the infantry is gone
+  assert.equal(lab.byType!["Tank"].kills, 3); assert.equal(lab.byType!["Tank"].fielded, 1);
+  assert.equal(lab.byType!["Infantry"].lost, 1); assert.equal(lab.byType!["Infantry"].kills, 0);
+  const sum = combatSummary(lab);
+  assert.equal(sum.kills, 3); assert.equal(sum.lost, 1); assert.equal(sum.kd, 3);
+  assert.equal(sum.units[0].name, "Tank", "the unit that scored and survived ranks first");
+  lab.attacks = { won: 3, failed: 1 }; assert.equal(combatSummary(lab).attackRate, 0.75);
+  // a unit type that keeps dying without kills is ranked below one that scores, once enough of them have been fielded
+  const k2 = new Knowledge();
+  for (const [n, f, ki, lo] of [["Good Tank", 5, 12, 1], ["Bad Tank", 5, 0, 5], ["Plain Infantry", 5, 3, 3]] as const) { k2.recordUnit("fielded", n, f, 3000); k2.recordUnit("kill", n, ki, 3000); k2.recordUnit("lost", n, lo, 3000); k2.recordUnit("hours", n, 10, 3000); }
+  assert.ok(k2.unitFactor("Good Tank Lvl. 2") > 1 && k2.unitFactor("Bad Tank") < 1, "learned usefulness shifts the choice (level suffix ignored)");
+  assert.equal(new Knowledge().unitFactor("Good Tank"), 1, "no evidence, no change");
+  assert.equal(k.data.units["Tank"].kills, 3); assert.equal(k.summary().units[0].name, "Tank", "also kept across games");
+});
+ok("market: a cheap resource whose price doubled is still buyable (escalated bid), while a far-above-quote ask is not taken", () => {
+  const s = base(); s.resources["2"].amount = 100;
+  const budget = () => Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));
+  const m = mem(); m.bidBump["2"] = 12; // the bid has been escalated again and again
+  const cheap: MarketInfo = { prices: { "2": { price: 6, min: 3, max: 15 } }, asks: [], bids: [], mine: [] }; // nobody sells: only a bid can work
+  const short: Record<string, number> = {}; noteShort(short, budget(), { "2": 400 }, settings().reserve, false, "Build Arms Industry in X"); // a build is waiting on components
+  const out = planMarket(s, settings(), cheap, m, budget(), short);
+  assert.equal(out.length, 1, "still buys (the old 2.5x-floor ceiling of 7 blocked a bid of 8)");
+  assert.ok((out[0].args as number[])[2] <= Math.ceil(6 * 1.3), "but never bids above 1.3x the quote");
+  const dear: MarketInfo = { prices: { "4": { price: 12, min: 9, max: 27 } }, asks: [{ id: 9, buy: false, amount: 500, limit: 23, res: 4, player: 5 }], bids: [], mine: [] };
+  s.resources["4"].amount = 100;
+  const short2: Record<string, number> = {}; noteShort(short2, budget(), { "4": 600 }, settings().reserve, false, "Build X");
+  const o2 = planMarket(s, settings(), dear, mem(), budget(), short2);
+  assert.ok(o2.every((d) => (d.args as number[])[2] <= Math.ceil(12 * 1.3)), "an ask far above the quote is not taken");
+});
+ok("diplomacy: peace that another player offers me is accepted, unless I am deliberately fighting them", () => {
+  const s = base(); s.players[0].rel = -2; s.players[0].relBack = 1; // they stand at peace toward me, I am still at war
+  const out = planDiplomacy(s, settings({ warPolicy: "none" }), mem());
+  const acc = out.filter((d) => d.label.startsWith("Accept peace"));
+  assert.equal(acc.length, 1); assert.deepEqual(acc[0].args, [11, 1]);
+  const m = mem(); m.lastPeaceOffer[11] = Date.now() - 3600_000;
+  assert.equal(planDiplomacy(s, settings({ warPolicy: "none" }), m).filter((d) => d.label.startsWith("Accept peace")).length, 0, "not repeated within 3h");
+  assert.equal(planDiplomacy(s, settings({ warPolicy: "none", targetPlayers: [11] }), mem()).filter((d) => d.label.startsWith("Accept peace")).length, 0, "not when they are a chosen target");
+  s.players[0].rel = 1;
+  assert.equal(planDiplomacy(s, settings({ warPolicy: "none" }), mem()).filter((d) => d.label.startsWith("Accept peace")).length, 0, "already at peace");
 });
 ok("market: bids when low, never overspends, cancels stale bid and escalates", () => {
   const s = base(); s.resources["4"].amount = 100;
@@ -744,6 +861,21 @@ ok("builds: upgrades with no cost data (the server accepts them but never starts
   assert.equal(planBuilds(s, settings(), options, { ...rich }, {}).length, 0);
   const real = new Map([[p.id, { upgrades: [{ id: 2275, name: "Arms Industry", costs: { "20": 1250 }, daily: {} }], productions: [] }]]);
   assert.equal(planBuilds(s, settings(), real, { ...rich }, {}).length, 1);
+});
+ok("builds: with no way to train ground units, an Army Base is built on a thin cushion (reserves would have blocked it)", () => {
+  const s = base(); s.frontier[0].adj = [1]; // the enemy border touches my city, so the base is wanted there
+  const p = s.provinces.find((x) => x.freeSlot)!; p.city = true;
+  const options = new Map([[p.id, { upgrades: [{ id: 2250, name: "Army Base", costs: { "1": 250, "5": 500, "20": 2000 }, daily: {} }], productions: [] }]]);
+  // supplies/fuel sit just above the usual reserve: the normal planner cannot afford the base ...
+  const tight = { "1": 880, "2": 2000, "3": 8000, "4": 500, "5": 800, "6": 700, "20": 5500 };
+  assert.equal(planBuilds(s, settings(), options, { ...tight }, {}).length, 0, "blocked by the normal reserve");
+  // ... but on the thin cushion it goes through, and only the unlocking buildings are considered
+  const thin = Object.fromEntries(Object.entries(DEFAULT_SETTINGS.reserve).map(([k, v]) => [k, v * 0.2]));
+  const out = planBuilds(s, settings(), options, { ...tight }, {}, undefined, undefined, { only: /^(Army Base|Recruiting Office)/, reserve: thin });
+  assert.equal(out.length, 1); assert.equal(out[0].label.startsWith("Build Army Base"), true);
+  const other = new Map([[p.id, { upgrades: [{ id: 2275, name: "Arms Industry", costs: { "20": 1250 }, daily: {} }], productions: [] }]]);
+  assert.equal(planBuilds(s, settings(), other, { ...tight }, {}, undefined, undefined, { only: /^(Army Base|Recruiting Office)/, reserve: thin }).length, 0, "only the unlocking buildings");
+  assert.equal(planBuilds(s, settings(), options, { ...tight }, {}, undefined, undefined, { reserve: thin, skip: new Set([p.id]) }).length, 0, "a province already handled is skipped");
 });
 ok("military: an attack order that does not take effect (game wants a war declaration) -> declare war once, retry once, then back off; no order spam", () => {
   const s = base(); // the target owner has NO recorded stance, like a fresh game where nobody is at war by default

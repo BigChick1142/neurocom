@@ -1,13 +1,14 @@
 // Discord side of the bot: alerts into one channel and a few owner-only slash commands, for every game being played.
 // Safety: commands work for ONE user id only (DISCORD_OWNER_ID); until it is set, every command is refused.
 // It can only use controls the dashboard already has (pause/resume, report, send a message). Nothing else.
-import { Client, EmbedBuilder, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder, type ChatInputCommandInteraction, type TextChannel } from "discord.js";
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, Client, EmbedBuilder, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction, type TextChannel } from "discord.js";
+import { DASH_TABS, dashboardShot, inQueue } from "./shots.js";
 import type { Bot, LogEntry } from "../bot/runner.js";
 import type { GameManager } from "../manager.js";
 import { status } from "../dashboard/server.js";
 import { appIdFromToken } from "./setup.js";
 
-const gameOption = (o: import("discord.js").SlashCommandStringOption) => o.setName("game").setDescription("Which game (nation, player name or game id). Optional when only one is open");
+const gameOption = (o: import("discord.js").SlashCommandStringOption) => o.setName("game").setDescription("Pick a game from the list (optional when only one game is still alive)").setAutocomplete(true);
 const COMMANDS = [
   new SlashCommandBuilder().setName("status").setDescription("What the bot is doing right now").addStringOption(gameOption),
   new SlashCommandBuilder().setName("report").setDescription("Progress since it started").addStringOption(gameOption),
@@ -16,6 +17,10 @@ const COMMANDS = [
   new SlashCommandBuilder().setName("reply").setDescription("Send an in-game message to a player")
     .addStringOption((o) => o.setName("player").setDescription("Nation or player name").setRequired(true))
     .addStringOption((o) => o.setName("text").setDescription("What to say").setRequired(true).setMaxLength(400))
+    .addStringOption(gameOption),
+  new SlashCommandBuilder().setName("map").setDescription("Screenshot of the game map").addStringOption(gameOption),
+  new SlashCommandBuilder().setName("dashboard").setDescription("Screenshot of a dashboard page")
+    .addStringOption((o) => o.setName("page").setDescription("Which page (default Home)").addChoices(...DASH_TABS.map(([v, n]) => ({ name: n, value: v }))))
     .addStringOption(gameOption),
   new SlashCommandBuilder().setName("games").setDescription("List the games the bot is playing"),
 ].map((c) => c.toJSON());
@@ -129,7 +134,65 @@ export async function startDiscord(manager: GameManager): Promise<void> {
     return `Over ${hours.toFixed(1)}h: VP ${a.vp} → ${b.vp} (${((b.vp - a.vp) / Math.max(hours, 0.1)).toFixed(2)}/h), provinces ${a.provinces} → ${b.provinces}, units ${a.units} → ${b.units}, money ${n0(a.money)} → ${n0(b.money)}.`;
   };
 
-  const gamesText = () => manager.list().map((g) => `• ${g.nation} (${g.name}) · game ${g.id} · day ${g.day} · ${g.vp} VP · ${g.connected ? (g.enabled ? "playing" : "paused") : "not connected"}`).join("\n") || "No game is open. Open one in the bot's browser window.";
+  const gamesText = () => manager.list().map((g) => `• ${g.nation} (${g.name})${manager.bots.get(g.id) && isOver(manager.bots.get(g.id)!) ? " **game over**" : ""} · game ${g.id} · day ${g.day} · ${g.vp} VP · ${g.connected ? (g.enabled ? "playing" : "paused") : "not connected"}`).join("\n") || "No game is open. Open one in the bot's browser window.";
+
+  // A game is "over" once its capital is gone: it is listed last and never chosen by default.
+  const isOver = (b: Bot) => { const s = b.state; return !!s && (s.provinces.length === 0 || !s.provinces.some((p) => p.id === s.me.capital)); };
+  const defaultGame = (): Bot | undefined => {
+    if (manager.bots.size === 1) return manager.first();
+    const alive = [...manager.bots.values()].filter((b) => !isOver(b));
+    return alive.length === 1 ? alive[0] : undefined;
+  };
+  /** The pick list for the game option: nation names, the games that are still alive first. */
+  async function complete(i: import("discord.js").AutocompleteInteraction) {
+    if (!ownerId || i.user.id !== ownerId) { await i.respond([]); return; }
+    const typed = i.options.getFocused().toLowerCase();
+    const rows = [...manager.bots.values()].map((b) => ({ b, over: isOver(b) })).sort((a, c) => Number(a.over) - Number(c.over));
+    const choices = rows.filter(({ b }) => !typed || (b.state?.me.nation ?? "").toLowerCase().includes(typed) || b.gameId.startsWith(typed))
+      .map(({ b, over }) => ({ name: `${b.state?.me.nation ?? "Game " + b.gameId}${over ? " (game over)" : ""} · day ${b.state?.day ?? "?"} · ${b.state?.me.vps ?? 0} VP`, value: b.gameId })).slice(0, 25);
+    await i.respond(choices);
+  }
+
+  // Buttons under the status card: everything you would otherwise type.
+  const buttons = (bot: Bot) => new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`neuro:map:${bot.gameId}`).setLabel("Map").setEmoji("🗺️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`neuro:dash:${bot.gameId}`).setLabel("Dashboard").setEmoji("📊").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`neuro:report:${bot.gameId}`).setLabel("Progress").setEmoji("📈").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`neuro:${bot.settings.enabled ? "pause" : "resume"}:${bot.gameId}`).setLabel(bot.settings.enabled ? "Pause" : "Resume").setEmoji(bot.settings.enabled ? "⏸️" : "▶️").setStyle(bot.settings.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+  );
+  const nameOf = (bot: Bot) => bot.state?.me.nation ?? bot.gameId;
+  type Replyable = ChatInputCommandInteraction | ButtonInteraction;
+  async function sendMap(i: Replyable, bot: Bot) {
+    const mine = { flags: MessageFlags.Ephemeral } as const;
+    await i.deferReply(mine);
+    try {
+      const png = await inQueue(() => manager.gameShot(bot.gameId));
+      if (!png) { await i.editReply("That game's tab is not open in the bot's browser, so there is no map to show."); return; }
+      await i.editReply({ content: `🗺️ ${nameOf(bot)}: the game map right now`, files: [new AttachmentBuilder(png, { name: `map-${bot.gameId}.png` })] });
+    } catch (e) { await i.editReply(`Could not take the screenshot: ${(e as Error).message.split("\n")[0]}`); }
+  }
+  async function sendDash(i: Replyable, bot: Bot, tab: string) {
+    const mine = { flags: MessageFlags.Ephemeral } as const;
+    await i.deferReply(mine);
+    try {
+      const png = await dashboardShot(Number(process.env.PORT ?? 8787), bot.gameId, tab);
+      await i.editReply({ content: `📊 ${nameOf(bot)}: dashboard, ${DASH_TABS.find(([v]) => v === tab)?.[1] ?? tab}`, files: [new AttachmentBuilder(png, { name: `dashboard-${tab}-${bot.gameId}.png` })] });
+    } catch (e) { await i.editReply(`Could not take the screenshot: ${(e as Error).message.split("\n")[0]}`); }
+  }
+  async function onButton(i: ButtonInteraction) {
+    const mine = { flags: MessageFlags.Ephemeral } as const;
+    if (!ownerId || i.user.id !== ownerId) { await i.reply({ content: "Not authorised.", ...mine }); return; }
+    const [, action, gameId] = i.customId.split(":");
+    const bot = manager.get(gameId);
+    if (!bot) { await i.reply({ content: "That game is no longer open.", ...mine }); return; }
+    if (action === "map") await sendMap(i, bot);
+    else if (action === "dash") await sendDash(i, bot, "home");
+    else if (action === "report") await i.reply({ content: report(bot), ...mine });
+    else if (action === "pause" || action === "resume") {
+      bot.updateSettings({ enabled: action === "resume" });
+      await i.update({ embeds: [statusEmbed(bot)], components: [buttons(bot)] }); // the card refreshes in place, with the other button
+    }
+  }
 
   async function handle(i: ChatInputCommandInteraction) {
     const mine = { flags: MessageFlags.Ephemeral } as const;
@@ -137,10 +200,12 @@ export async function startDiscord(manager: GameManager): Promise<void> {
     if (i.commandName === "games") { await i.reply({ content: gamesText(), ...mine }); return; }
     // which game? explicit option, else the only one
     const q = i.options.getString("game");
-    const bot = q ? manager.find(q) : manager.bots.size === 1 ? manager.first() : undefined;
-    if (!bot) { await i.reply({ content: manager.bots.size === 0 ? "No game is open yet." : q ? `No single game matches "${q}".\n${gamesText()}` : `Several games are open, add the game option:\n${gamesText()}`, ...mine }); return; }
+    const bot = q ? manager.find(q) : defaultGame();
+    if (!bot) { await i.reply({ content: manager.bots.size === 0 ? "No game is open yet." : q ? `No single game matches "${q}".\n${gamesText()}` : `Several games are still alive, pick one in the game option:\n${gamesText()}`, ...mine }); return; }
     switch (i.commandName) {
-      case "status": await i.reply({ embeds: [statusEmbed(bot)], ...mine }); break;
+      case "status": await i.reply({ embeds: [statusEmbed(bot)], components: [buttons(bot)], ...mine }); break;
+      case "map": await sendMap(i, bot); break;
+      case "dashboard": await sendDash(i, bot, i.options.getString("page") ?? "home"); break;
       case "report": await i.reply({ content: report(bot), ...mine }); break;
       case "pause": bot.updateSettings({ enabled: false }); await i.reply({ content: `Paused (${bot.state?.me.nation ?? bot.gameId}).`, ...mine }); break;
       case "resume": bot.updateSettings({ enabled: true }); await i.reply({ content: `Resumed (${bot.state?.me.nation ?? bot.gameId}).`, ...mine }); break;
@@ -155,7 +220,11 @@ export async function startDiscord(manager: GameManager): Promise<void> {
     }
   }
 
-  client.on("interactionCreate", (i) => { if (i.isChatInputCommand()) handle(i).catch((e) => console.error("discord command failed:", e)); });
+  client.on("interactionCreate", (i) => {
+    if (i.isAutocomplete()) complete(i).catch((e) => console.error("discord autocomplete failed:", e));
+    else if (i.isButton()) onButton(i).catch((e) => console.error("discord button failed:", e));
+    else if (i.isChatInputCommand()) handle(i).catch((e) => console.error("discord command failed:", e));
+  });
   client.once("clientReady", async () => {
     state.connected = true; state.botName = client.user?.tag ?? null;
     console.log(`Discord: logged in as ${client.user?.tag}${ownerId ? "" : " (owner not set: commands are refused)"}`);

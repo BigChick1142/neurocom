@@ -53,6 +53,8 @@ The **Players** tab lists everyone in the game: filter, sort, click a player to 
 
 ## Campaign: tell it the plan
 
+**Economy and wars (from 2026 pro guides):** Arms Industry is maxed first in cities that make the scarcest resource, Local Industry goes on nearby resource provinces, Underground Bunkers come from about day 25, and a Secret Weapons Lab and Annex City are built mid game only. The bot fights at most a few wars at once (each costs morale, which cuts output). **Settings → Fine-tune** has sliders for wars at once, money cushion, attack margins, army size, reserve, chattiness and speed; **Look and feel** changes accent colour, density, theme and which tabs show (kept in your browser).
+
 In **Settings → Campaign** you can give a game an ordered plan: take one named province first, then make peace with chosen players, then press other players' cities. While step 1 runs the bot only attacks that province; after taking it, it offers peace to the chosen players (once, with a short message) and leaves them alone; then it favours the chosen players' cities. The usual strength margin still applies, so it builds up first when it is too weak, and it will not attack a player who has no border with you.
 
 ## Discord (optional)
@@ -103,7 +105,7 @@ State is saved in `data/`: `settings.json`, `memory.json` (so restarts don't re-
 | Command | What |
 |---------|------|
 | `npm start` | Bot + dashboard (http://127.0.0.1:8787) |
-| `npm test` | 70 offline scenario tests of the planners (synthetic game states) |
+| `npm test` | 73 offline scenario tests of the planners (synthetic game states) |
 | `npm run typecheck` | TypeScript check |
 | `npm run report` | Progress / action / refusal summary from `data/*.jsonl` |
 | `npm run ev "<js>"` | Evaluate JS inside the live game page |

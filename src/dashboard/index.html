@@ -163,6 +163,14 @@
   .grid2 { display:grid; gap:10px 16px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin-top:8px; }
   label.f { display:grid; gap:3px; font-size:13px; color:var(--muted); }
   input[type=number], input[type=text], select { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:6px 9px; width:100%; }
+  .sl { display:grid; grid-template-columns:1fr auto; gap:2px 12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  .sl:last-child { border-bottom:0; } .sl b { font-weight:600; } .sl .v { font-variant-numeric:tabular-nums; color:var(--accent); font-weight:700; min-width:3.2em; text-align:right; }
+  .sl .d { grid-column:1 / -1; color:var(--muted); font-size:12.5px; } .sl input[type=range] { grid-column:1 / -1; width:100%; accent-color:var(--accent); height:22px; cursor:pointer; }
+  .sw8 { display:flex; gap:8px; flex-wrap:wrap; } .sw8 button { width:30px; height:30px; border-radius:50%; border:2px solid transparent; cursor:pointer; box-shadow:0 0 0 1px var(--line); }
+  .sw8 button[aria-pressed="true"] { border-color:var(--text); transform:scale(1.12); }
+  :root[data-density="compact"] .card { padding:10px 12px; } :root[data-density="compact"] .row, :root[data-density="compact"] .list > div { padding-top:5px; padding-bottom:5px; } :root[data-density="compact"] body { font-size:13.5px; }
+  header::after { background:linear-gradient(90deg,var(--accent),var(--accent2),transparent 70%); }
+  .card { transition:border-color .2s, box-shadow .2s; } .card:hover { border-color:color-mix(in srgb,var(--accent) 45%,var(--line)); }
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
   .seg button { border:0; background:transparent; padding:6px 14px; font-size:14px; }
   .seg button[aria-pressed="true"] { background:var(--accent); color:var(--on-accent); }
@@ -409,6 +417,26 @@ function viewActivity() {
     ${rows.length ? `<div class="list" style="max-height:640px;overflow:auto">${rows.map((l) => { const k = kindOf(l); const lvl = l.level === "error" ? "bad" : l.level === "warn" ? "warn" : k[1]; return `<div><span class="t">${clock(l.t)}</span><span class="main"><span class="tag ${lvl}">${esc(k[0])}</span> ${esc(l.text)}${l.reason ? `<div class="why">${esc(l.reason)}</div>` : ""}</span></div>`; }).join("")}</div>` : `<div class="empty">Nothing in this view.</div>`}</section></div>`;
 }
 
+/* ---------- look and feel (kept in this browser only) ---------- */
+const ACCENTS = { cyan: ["#22d3ee", "#04222b"], violet: ["#a78bfa", "#1b1033"], green: ["#4ade80", "#06260f"], amber: ["#fbbf24", "#2b1d00"], rose: ["#fb7185", "#2d0710"], blue: ["#60a5fa", "#06192e"] };
+const TABS_ALL = TABS;
+let look = { accent: "cyan", density: "comfy", hidden: [] };
+try { Object.assign(look, JSON.parse(localStorage.getItem("look") || "{}")); } catch { /* storage blocked */ }
+if (!Array.isArray(look.hidden)) look.hidden = [];
+function applyLook() {
+  const r = document.documentElement, a = ACCENTS[look.accent] || ACCENTS.cyan;
+  r.style.setProperty("--accent", a[0]); r.style.setProperty("--on-accent", a[1]); r.style.setProperty("--accent-bg", a[0] + "22");
+  r.dataset.density = look.density;
+  try { localStorage.setItem("look", JSON.stringify(look)); } catch { /* storage blocked */ }
+}
+applyLook();
+/** A labelled slider. `key` is a setting ("maxWars") or a nested one ("attackRatio.balanced"). The number shows live; the setting is saved on release. */
+function slider(key, title, desc, min, max, step, val, fmt) {
+  const nested = key.includes(".");
+  return `<div class="sl"><b>${title}</b><span class="v" data-for="${key}">${fmt(val)}</span><div class="d">${desc}</div><input type="range" min="${min}" max="${max}" step="${step}" value="${val}" ${nested ? `data-nested="${key}"` : `data-num="${key}"`} data-fmt="${key}" aria-label="${title}"></div>`;
+}
+const SLIDER_FMT = { econCushion: (v) => Math.round(v * 100) + "%", "attackRatio.balanced": (v) => v.toFixed(2) + "x", "attackRatio.aggressive": (v) => v.toFixed(2) + "x", "reserve.20": (v) => Number(v).toLocaleString(), tickSeconds: (v) => v + "s" };
+
 const PRESETS = {
   safe: { name: "Safe", text: "Build economy first, attack only when clearly stronger, never go to war with players.", patch: { mode: "economy", autoMode: false, warPolicy: "ai_only" } },
   auto: { name: "Smart (recommended)", text: "The bot switches between building, balanced and attacking by itself. Fights players only if they're weak or attack first.", patch: { autoMode: true, warPolicy: "non_allies" } },
@@ -429,6 +457,22 @@ function viewSettings() {
       <div class="row"><div class="what"><b>Allow nuclear and chemical weapons</b><div>Off is strongly recommended: it wrecks morale and relations.</div></div><label class="switch"><input type="checkbox" data-sw="allowWmd" ${st.allowWmd ? "checked" : ""} aria-label="Allow weapons of mass destruction"><span></span></label></div></section>
     <section class="card"><h2>Who it may attack</h2><div class="seg" id="wp">${[["none", "Nobody"], ["ai_only", "Computer nations only"], ["non_allies", "Anyone who isn't an ally"]].map(([k, t]) => `<button data-wp="${k}" aria-pressed="${st.warPolicy === k}">${t}</button>`).join("")}</div>
       <p class="sub" style="margin-top:8px">Coalition mates and allies are always protected.</p></section>
+    <section class="card"><h2>Fine-tune <small>drag to change; saved when you let go, applies to this game</small></h2>
+      ${slider("maxWars", "Wars at once", "Every open war costs morale (2 points each), and morale drives resource output. Fewer wars, finished one by one, is the pro habit.", 1, 8, 1, st.maxWars ?? 2, (v) => v)}
+      ${slider("econCushion", "Money cushion for economy builds", "How much of the money reserve Arms Industry and friends must leave untouched. Lower builds the economy faster, higher is safer.", 0, 1, 0.05, st.econCushion ?? 0.4, (v) => Math.round(v * 100) + "%")}
+      ${slider("attackRatio.balanced", "Strength margin to attack (balanced)", "Attack only when my force is this many times the defender. Higher is safer. The bot also tunes it from results.", 1, 4, 0.05, st.attackRatio.balanced, (v) => v.toFixed(2) + "x")}
+      ${slider("attackRatio.aggressive", "Strength margin (aggressive)", "Same, used in aggressive mode.", 1, 3, 0.05, st.attackRatio.aggressive, (v) => v.toFixed(2) + "x")}
+      ${slider("maxUnits.balanced", "Army size cap (balanced)", "More units win fights and cost upkeep. The bot grows this itself when it has headroom.", 4, 150, 1, st.maxUnits.balanced, (v) => v)}
+      ${slider("reserve.20", "Money to keep in reserve", "Units and research never spend below this.", 0, 10000, 100, st.reserve["20"] ?? 0, (v) => v.toLocaleString())}
+      ${slider("messageLimitPerHour", "Messages per hour (max)", "Caps how chatty the bot is with other players.", 0, 30, 1, st.messageLimitPerHour, (v) => v)}
+      ${slider("tickSeconds", "Seconds between decisions", "Shorter reacts faster but uses more of the game's server.", 5, 120, 5, st.tickSeconds, (v) => v + "s")}
+      <div class="row"><div class="what"><b>Annex cities</b><div>Mid game, near home, for a resource I lack (about 10,000 money each).</div></div><label class="switch"><input type="checkbox" data-sw="doAnnex" ${st.doAnnex !== false ? "checked" : ""} aria-label="Annex cities"><span></span></label></div>
+      <div class="row"><div class="what"><b>Secret Weapons Lab</b><div>One, from about day 20, for missiles and stealth units.</div></div><label class="switch"><input type="checkbox" data-sw="doLab" ${st.doLab !== false ? "checked" : ""} aria-label="Secret weapons lab"><span></span></label></div></section>
+    <section class="card"><h2>Look and feel <small>only changes this browser</small></h2>
+      <div class="row"><div class="what"><b>Accent colour</b></div><div class="sw8">${Object.entries(ACCENTS).map(([k, a]) => `<button data-accent="${k}" style="background:${a[0]}" aria-label="${k}" aria-pressed="${look.accent === k}"></button>`).join("")}</div></div>
+      <div class="row"><div class="what"><b>Density</b></div><div class="seg">${[["comfy", "Comfortable"], ["compact", "Compact"]].map(([k, t]) => `<button data-density="${k}" aria-pressed="${look.density === k}">${t}</button>`).join("")}</div></div>
+      <div class="row"><div class="what"><b>Theme</b></div><div class="seg">${[["dark", "Dark"], ["light", "Light"]].map(([k, t]) => `<button data-themeset="${k}" aria-pressed="${(document.documentElement.dataset.theme || "dark") === k}">${t}</button>`).join("")}</div></div>
+      <div class="row"><div class="what"><b>Tabs shown</b><div>Hide what you don't use. Settings always stays.</div></div><div class="seg" style="flex-wrap:wrap">${TABS_ALL.map(([k, t]) => `<button data-tabvis="${k}" aria-pressed="${!look.hidden.includes(k)}" ${k === "settings" ? "disabled" : ""}>${t}</button>`).join("")}</div></div></section>
     ${campCard()}
     <section class="card" id="discord-card"><h2>Discord <small>optional: alerts and commands on your phone</small></h2><div class="empty">Loading…</div></section>
     <section class="card"><details><summary>Advanced numbers</summary>
@@ -834,7 +878,7 @@ function renderHeader() {
   if (s) { const pct = Math.min(100, (s.me.vps / (s.vpLimit || 1)) * 100); $("vptext").innerHTML = `<b class="num">${n0(s.me.vps)}</b> / ${n0(s.vpLimit)}`; $("vpbar").style.width = pct + "%"; }
   const p = $("pause"); p.textContent = st.enabled ? "Pause bot" : "Resume bot"; p.className = "btn " + (st.enabled ? "stop" : "primary");
   const wait = S.needsHuman.length;
-  $("tabs").innerHTML = TABS.map(([k, t]) => `<button class="tab" role="tab" aria-selected="${tab === k}" data-tab="${k}">${t}${k === "diplomacy" && wait ? `<span class="badge">${wait}</span>` : ""}</button>`).join("");
+  $("tabs").innerHTML = TABS.filter(([k]) => !look.hidden.includes(k)).map(([k, t]) => `<button class="tab" role="tab" aria-selected="${tab === k}" data-tab="${k}">${t}${k === "diplomacy" && wait ? `<span class="badge">${wait}</span>` : ""}</button>`).join("");
 }
 function render() {
   if (!S) return;
@@ -868,12 +912,16 @@ document.addEventListener("change", (e) => { if (e.target.id === "game") switchG
 document.addEventListener("click", (e) => {
   if (e.target.closest("#addgame,#addgame2")) { post("/api/addgame", {}).then(() => toast("Opened a new tab on the game site: pick a game there")); return; }
   if (e.target.closest("[data-dc]")) { dcAction(e.target.closest("[data-dc]").dataset.dc); return; }
-  const t = e.target.closest("[data-tab],[data-lf],[data-range],[data-preset],[data-wp],[data-dismiss],[data-reply],#pause,#theme"); if (!t) return;
+  const t = e.target.closest("[data-tab],[data-lf],[data-range],[data-preset],[data-wp],[data-accent],[data-density],[data-themeset],[data-tabvis],[data-dismiss],[data-reply],#pause,#theme"); if (!t) return;
   if (t.dataset.tab) { tab = t.dataset.tab; store.set("tab", tab); render(); }
   else if (t.dataset.lf) { logFilter = t.dataset.lf; render(); }
   else if (t.dataset.range) { chartRange = t.dataset.range; store.set("range", chartRange); render(); }
   else if (t.dataset.preset) { save(PRESETS[t.dataset.preset].patch, "Play style updated"); }
   else if (t.dataset.wp) { save({ warPolicy: t.dataset.wp }, "Saved"); }
+  else if (t.dataset.accent) { look.accent = t.dataset.accent; applyLook(); lastSettingsSig = ""; render(); }
+  else if (t.dataset.density) { look.density = t.dataset.density; applyLook(); lastSettingsSig = ""; render(); }
+  else if (t.dataset.themeset) { document.documentElement.dataset.theme = t.dataset.themeset; store.set("theme", t.dataset.themeset); lastSettingsSig = ""; render(); }
+  else if (t.dataset.tabvis) { const k = t.dataset.tabvis; look.hidden = look.hidden.includes(k) ? look.hidden.filter((x) => x !== k) : [...look.hidden, k]; if (look.hidden.includes(tab)) { tab = "home"; store.set("tab", tab); } applyLook(); lastSettingsSig = ""; render(); }
   else if (t.dataset.reply) { sendReply(Number(t.dataset.reply)); }
   else if (t.dataset.dismiss) { post("/api/dismiss", { t: Number(t.dataset.dismiss) }).then(() => toast("Dismissed")); }
   else if (t.id === "pause") { save({ enabled: !S.settings.enabled }, S.settings.enabled ? "Bot paused" : "Bot resumed"); }
@@ -890,6 +938,10 @@ document.addEventListener("change", (e) => {
   if (el.dataset.sw) save({ [el.dataset.sw]: el.checked });
   else if (el.dataset.num) save({ [el.dataset.num]: el.type === "number" ? Number(el.value) : el.value });
   else if (el.dataset.nested) { const [a, b] = el.dataset.nested.split("."); save({ [a]: { [b]: Number(el.value) } }); }
+});
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (el.type === "range" && el.dataset.fmt) { const lab = document.querySelector(`[data-for="${el.dataset.fmt}"]`); const v = Number(el.value); if (lab) lab.textContent = (SLIDER_FMT[el.dataset.fmt] || ((x) => x))(v); }
 });
 document.addEventListener("input", (e) => { if (e.target.id === "pf") { playerFilter = e.target.value; render(); } });
 

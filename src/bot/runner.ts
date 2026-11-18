@@ -411,6 +411,8 @@ export class Bot extends EventEmitter {
     const tinyArmy = unitCount < 8;
     // No province can train ground units (their buildings were lost or never built) and the army is tiny: the building that unlocks training comes before everything else, on a thin cushion, even in an emergency.
     const groundCapable = [...options.values()].some((o) => o.productions.some((u) => { const r = roleOf(u); return r === "inf" || r === "armor" || r === "arty" || r === "aa"; }));
+    // Economy buildings pay for themselves, so with a real army and no threat they may dip into the money cushion (units and research keep the full one).
+    const econReserve = tinyArmy || emergency ? st.reserve : { ...st.reserve, "20": (st.reserve["20"] ?? 0) * st.econCushion };
     let fastBuilt = new Set<number>();
     if (st.doBuild && tinyArmy && !groundCapable) {
       const thin = Object.fromEntries(Object.entries(st.reserve).map(([k, v]) => [k, v * 0.2]));
@@ -420,10 +422,10 @@ export class Bot extends EventEmitter {
     }
     if (st.mode === "aggressive" || opportunity || tinyArmy) {
       if (st.doMobilize) plan.push(...planMobilize(s, st, options, budget, this.mem.blocked, short, lab, emergency));
-      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab, { skip: fastBuilt }));
+      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab, { skip: fastBuilt, reserve: econReserve }));
       await research();
     } else {
-      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab, { skip: fastBuilt }));
+      if (st.doBuild && !emergency) plan.push(...planBuilds(s, st, options, budget, this.mem.blocked, short, lab, { skip: fastBuilt, reserve: econReserve }));
       await research();
       if (st.doMobilize) plan.push(...planMobilize(s, st, options, budget, this.mem.blocked, short, lab, emergency));
     }

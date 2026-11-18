@@ -157,6 +157,38 @@ ok("builds: skips what the province already has and anything blocked as a repeat
   const blocked = { "build:1:2285": Date.now() + 1e6 };
   assert.equal(planBuilds(s, settings(), opts, budget(), blocked).length, 0);
 });
+ok("builds: Secret Weapons Lab only mid-game with an army, one at a time", () => {
+  const s = base(); s.provinces[0].city = true;
+  s.armies = Array.from({ length: 9 }, (_, i) => army(i + 10, { units: [{ t: 1, h: 1, k: 0, n: "Motorized Infantry" }] }));
+  const opts = new Map<number, ProvOptions>([[1, { productions: [], upgrades: [{ id: 2400, name: "Secret Weapons Lab Lvl. 1", costs: { "1": 400, "20": 1250 }, daily: {} }] }]]);
+  const budget = () => Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));
+  s.day = 5; assert.equal(planBuilds(s, settings(), opts, budget()).length, 0);
+  s.day = 25; assert.equal(planBuilds(s, settings(), opts, budget())[0]?.args[1], 2400);
+  s.provinces[0].have = [2400]; assert.equal(planBuilds(s, settings(), opts, budget()).length, 0);
+});
+ok("targets: at the war limit, only owners already at war are targeted", () => {
+  const s = base();
+  s.frontier = [{ ...s.frontier[0], id: 901, owner: 11 }, { ...s.frontier[0], id: 902, owner: 77 }] as typeof s.frontier;
+  s.players = [
+    { id: 11, name: "T", nation: "Thailand", team: 0, vps: 70, human: false, cap: 50, rel: -2 },
+    { id: 77, name: "B", nation: "Bee", team: 0, vps: 10, human: false, cap: 2, rel: undefined },
+    { id: 78, name: "C", nation: "Cee", team: 0, vps: 10, human: false, cap: 3, rel: -2 },
+  ] as any;
+  assert.deepEqual(findTargets(s, settings({ maxWars: 2 }), mem()).map((x) => x.prov.owner), [11], "2 wars open: no new one");
+  assert.equal(findTargets(s, settings({ maxWars: 3 }), mem()).length, 2, "room for a third war");
+});
+ok("builds: Annex City only mid-game, near home, for a lacking resource, once cheap builds are done", () => {
+  const s = base(); s.day = 20;
+  const city = s.provinces[0]; city.city = true; city.resType = 1; city.morale = 80;
+  s.resources["1"].perHour = 10; // supplies are what I lack
+  s.armies = Array.from({ length: 9 }, (_, i) => army(i + 10, { units: [{ t: 1, h: 1, k: 0, n: "Motorized Infantry" }] }));
+  const opts = new Map<number, ProvOptions>([[1, { productions: [], upgrades: [{ id: 2295, name: "Annex City", costs: { "1": 4250, "20": 10000 }, daily: {} }] }]]);
+  const rich = () => ({ "1": 9e4, "2": 9e4, "3": 9e4, "4": 9e4, "5": 9e4, "6": 9e4, "20": 9e5 });
+  assert.equal(planBuilds(s, settings(), opts, rich())[0]?.args[1], 2295);
+  s.day = 5; assert.equal(planBuilds(s, settings(), opts, rich()).length, 0, "too early");
+  s.day = 20; opts.get(1)!.upgrades.push({ id: 2275, name: "Arms Industry", costs: { "1": 400, "20": 1250 }, daily: {} });
+  assert.equal(planBuilds(s, settings(), opts, rich())[0].args[1], 2275, "cheap economy builds come first");
+});
 ok("research: mechanized beats veteran upgrades; WMD skipped", () => {
   const s = base();
   const budget = Object.fromEntries(Object.entries(s.resources).map(([k, v]) => [k, v.amount]));

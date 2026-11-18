@@ -98,7 +98,7 @@ export function planResearch(s: GameState, st: Settings, opts: ResearchOpt[], bu
 }
 
 // ---------------------------------------------------------------- BUILDINGS
-const SKIP_BUILD = /hive|complex|invisible|contaminator|decontaminator|relocate|secret weapons|command post|radiation|dome|crater|colon|annex|missile|silo/i;
+const SKIP_BUILD = /hive|complex|invisible|contaminator|decontaminator|relocate|command post|radiation|dome|crater|colon|missile|silo/i;
 const ARMY_BASE_IDS = new Set([2250, 2251, 2252, 2253, 2254]);
 const AIR_BASE_IDS = new Set([2255, 2256, 2257, 2258, 2259]);
 const NAVAL_BASE_IDS = new Set([2260, 2261, 2262, 2263, 2264]);
@@ -131,6 +131,16 @@ export function planBuilds(s: GameState, st: Settings, options: Map<number, Prov
   const armyBases = s.provinces.filter((p) => p.have?.some((i) => ARMY_BASE_IDS.has(i))).length;
   const wantBases = st.mode === "economy" ? 2 : st.mode === "balanced" ? 4 : 6;
   const cand: { p: Prov; u: UpgradeOpt; score: number }[] = [];
+  // Pro guides (2026): max Arms Industry first in cities that make the resource you lack (+10% output per level); Local Industry only on resource provinces near home;
+  // Field Hospitals are poor value; Underground Bunkers pay off from about day 25 (morale -> output) in home cities.
+  const rates = [1, 2, 4, 5, 6].map((r) => s.resources[r]?.perHour ?? 0).sort((x, y) => x - y);
+  const medRate = rates[Math.floor(rates.length / 2)] || 1;
+  const armyUnits = s.armies.reduce((a, x) => a + x.units.length, 0);
+  const labIds = new Set<number>(); // ids of every Secret Weapons level I could build, to spot one I already own
+  for (const o of options.values()) for (const u of o.upgrades) if (/^secret weapons/i.test(u.name)) labIds.add(u.id);
+  const labCities = s.provinces.filter((p) => p.have?.some((i) => labIds.has(i))).length;
+  const annexCand: { p: Prov; u: UpgradeOpt; score: number }[] = [];
+  const lacking = (rt: number) => [1, 2, 4, 5, 6].includes(rt) && (s.resources[rt]?.perHour ?? 0) < medRate * 0.9;
 
   for (const p of s.provinces) {
     if (!p.freeSlot || opts.skip?.has(p.id)) continue;
@@ -144,19 +154,31 @@ export function planBuilds(s: GameState, st: Settings, options: Map<number, Prov
       if (Object.keys(u.costs).length === 0) continue; // an upgrade with no cost data cannot be queued (accepted by the server, never started)
       if (p.have?.includes(u.id)) continue; // already built: ordering it again is a silent no-op
       if ((blocked["build:" + p.id + ":" + u.id] ?? 0) > Date.now()) continue;
-      const key = Object.keys(st.weights).find((k) => u.name.startsWith(k));
+      if (/^annex city/i.test(u.name)) {
+        if (!st.doAnnex) continue;
+        // Annexing an occupied city (+25% output there, and it can train units) is very costly: mid game, near home, a city whose resource I lack (later any city), and only once the cheaper economy builds are done.
+        const ok = s.day >= (lacking(p.resType ?? 0) ? 15 : 30) && p.city && near >= 2 && p.morale >= 50 && armyUnits >= 8;
+        if (ok) annexCand.push({ p, u, score: (lacking(p.resType ?? 0) ? 2 : 1) * p.morale });
+        continue;
+      }
+      const isLab = /^secret weapons/i.test(u.name);
+      const key = isLab ? "Secret Weapons" : Object.keys(st.weights).find((k) => u.name.startsWith(k));
       if (!key) continue;
-      let w = st.weights[key];
+      let w = st.weights[key] ?? 30;
+      // Secret Weapons Lab (missiles, stealth, elite units): pros build it late, never early. Mid game on, one in a safe home city, once the army and economy exist.
+      if (isLab && !st.doLab) continue;
+      if (isLab) w = s.day >= 20 && p.city && near >= 2 && armyUnits >= 8 && labCities === 0 ? Math.max(w, 30) : 0;
       if (key === "Army Base") w = p.city && near <= 2 && armyBases < wantBases && !p.have?.some((i) => ARMY_BASE_IDS.has(i)) ? w : 0;
       if (key === "Air Base") w = lab && lab.airShare > 0 ? (p.city && near >= 1 ? (airBases === 0 ? 70 : 28) * lab.mAir : w) : w * 0.5;
       if (key === "Naval Base") w = lab && lab.seaShare > 0 ? (navalBases === 0 ? 55 : 20) * lab.mSea : w * 0.5;
       if (key === "Recruiting Office") w = (s.resources[R.MAN]?.perHour ?? 0) < 60 ? w : w * 0.3;
-      if (key === "Local Industry") w = (p.resType ?? 0) > 0 && (p.resType ?? 0) !== 3 && (p.resType ?? 0) !== 20 ? w : 0;
+      if (key === "Local Industry") w = (p.resType ?? 0) > 0 && (p.resType ?? 0) !== 3 && (p.resType ?? 0) !== 20 ? w * (lacking(p.resType ?? 0) ? 1.3 : 0.8) * (near >= 2 ? 1 : 0.6) : 0;
+      if (key === "Arms Industry" && p.city && lacking(p.resType ?? 0)) w *= 1.35;
       // Low morale cuts production and breeds insurgents (wiki): Field Hospitals / Combat Outposts raise it, so favour them where morale is poor.
       const lowMorale = p.morale < 50;
-      if (key === "Combat Outpost" || key === "Field Hospital") w = lowMorale ? Math.max(w, 30) * (key === "Field Hospital" ? 2.2 : 1.4) : near <= 1 ? w : 0;
+      if (key === "Combat Outpost" || key === "Field Hospital") w = lowMorale ? Math.max(w, 30) * (key === "Field Hospital" ? 0.8 : 1.4) : near <= 1 ? w : 0;
       if (key === "Military Hospital") w = near <= 2 ? w : w * 0.3;
-      if (key === "Underground Bunkers") w = p.id === s.me.capital && st.mode !== "economy" ? w : 0;
+      if (key === "Underground Bunkers") w = s.day >= 25 && p.city && near >= 2 ? Math.max(w, 30) * (lacking(p.resType ?? 0) || p.morale < 90 ? 1.3 : 1) : p.id === s.me.capital && st.mode !== "economy" ? w : 0;
       if (p.city) w *= 1.25; // cities carry the economy
       if (w <= 0) continue;
       const hours = buildHours(u.id);
@@ -164,6 +186,11 @@ export function planBuilds(s: GameState, st: Settings, options: Map<number, Prov
       const cost = Math.max(500, sumCost(u.costs));
       cand.push({ p, u, score: (w * 1000) / cost / (1 + hours / 36) });
     }
+  }
+  if (!cand.length && annexCand.length) { // the cheap builds are done: save up for the best annexation (one at a time)
+    annexCand.sort((a, b) => b.score - a.score);
+    const a = annexCand[0];
+    cand.push({ p: a.p, u: a.u, score: 1 });
   }
   cand.sort((a, b) => b.score - a.score);
   const used = new Set<number>();
@@ -281,8 +308,14 @@ export function findTargets(s: GameState, st: Settings, mem: Memory, intel: Reco
   const out: Target[] = [];
   const now = Date.now();
   const camp = campaignStep(s, st, mem);
+  // Each war costs morale (2 points per war), and morale drives resource output: keep the number of simultaneous wars small and finish the ones already open.
+  const atWarWith = (id: number) => { const q = s.players.find((x) => x.id === id); return !!q && q.rel !== undefined && q.rel <= -2 && !intel[id]?.defeated; };
+  const warsNow = s.players.filter((q) => q.id !== s.me.id && atWarWith(q.id)).length;
+  const warRoom = warsNow < st.maxWars;
   for (const f of s.frontier) {
     if (!eligibleTarget(s, st, f.owner)) continue;
+    if (!warRoom && f.owner !== 0 && !atWarWith(f.owner) && !camp.focus.has(f.owner)) continue; // a new war would cost too much morale
+
     if (camp.only && f.name.trim().toLowerCase() !== camp.only) continue; // campaign step 1: only the named province
     if (camp.spare.has(f.owner)) continue; // campaign step 2: players I am making peace with are left alone
     if ((mem.failedTargets[f.id] ?? 0) > now - 10 * 60_000) continue;

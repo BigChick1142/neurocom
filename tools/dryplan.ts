@@ -8,7 +8,7 @@ import type { GameState } from "../src/bot/types.js";
 
 const { game } = await connect(); await inject(game);
 const s = await call<GameState>(game, "state");
-const st = loadSettings(defaultGameDir());
+const st = loadSettings(process.env.CON_GAME_ID ? "data/games/" + process.env.CON_GAME_ID : defaultGameDir());
 const ids = s.provinces.filter((p) => p.freeSlot).sort((a, b) => Number(b.city) - Number(a.city) || b.vp - a.vp).map((p) => p.id);
 const options = new Map<number, ProvOptions>();
 for (let i = 0; i < ids.length; i += 24) {

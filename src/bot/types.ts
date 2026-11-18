@@ -38,6 +38,10 @@ export interface Settings {
   tickSeconds: number;
   doResearch: boolean; doBuild: boolean; doMobilize: boolean; doMilitary: boolean; doDiplomacy: boolean; doMessaging: boolean; doMarket: boolean;
   /** apply to a coalition (shared victory limit, right of way); withdraws unanswered applications and tries the next */ doCoalition: boolean;
+  /** most wars fought at once (each costs morale, which cuts output); campaign targets are exempt */ maxWars: number;
+  /** share of the money cushion economy buildings may spend into (0.4 = they only need 40% of it) */ econCushion: number;
+  /** build Annex City (mid game, near home) */ doAnnex: boolean;
+  /** build a Secret Weapons Lab (mid game) */ doLab: boolean;
   warPolicy: PlayerPolicy;            // whom the bot may declare war on / attack
   allowWmd: boolean;                  // never touches WMD research/production unless true
   reserve: Record<string, number>;    // resource id -> amount to always keep banked
